@@ -1,0 +1,13 @@
+{
+  "name": "imputacion-de-datos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Herramientas de limpieza e imputacion de datos",
+  "scripts": {
+    "prettier": "prettier --write /src/**/* \"*.py\" \"*.json\"",
+    "prettier:check": "prettier --check \"*.md\" \"*.json\""
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1"
+  }
+}

@@ -1,0 +1,6 @@
+/node_modules
+/dist
+/coverage
+/.env
+/data/raw/parque_vehiculos_202503.txt
+/.venv
