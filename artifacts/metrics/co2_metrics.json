@@ -1,11 +1,11 @@
 {
-  "rows_total": 49999,
-  "rows_with_known_target": 25359,
+  "rows_total": 49998,
+  "rows_with_known_target": 25358,
   "rows_with_missing_target": 24640,
-  "mae": 10.024002940651158,
-  "rmse": 22.85226444239863,
-  "r2": 0.8589252885478582,
-  "input": "muestra_50k.csv",
-  "output": "muestra_50k_co2_imputado.csv",
-  "model_output": "co2_model.joblib"
+  "mae": 9.850695191074982,
+  "rmse": 21.791619877125004,
+  "r2": 0.8638150237880551,
+  "input": "data/processed/muestra_50k.csv",
+  "output": "muestra_imputada.csv",
+  "model_output": "artifacts/models/co2_model.joblib"
 }
