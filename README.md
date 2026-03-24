@@ -23,14 +23,29 @@ Instalacion:
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-## Ejecutar imputacion de CO2
+## Paso 1: depurar desde raw (solo filas con CO2 informado)
+
+Comando recomendado:
+
+```bash
+./.venv/bin/python src/depuracion_txt.py \
+  --input data/raw/muestra_50k.txt \
+  --output data/processed/muestra_50k_con_co2.csv \
+  --in-sep '|' \
+  --out-sep ,
+```
+
+Este paso genera un CSV en el que solo se conservan filas con valor en `EMISIONES_CO2`.
+
+## Paso 2: entrenar e imputar aplicando % de missing artificial
 
 Comando recomendado:
 
 ```bash
 ./.venv/bin/python src/imputacion_co2_ml.py \
-  --input data/processed/muestra_50k.csv \
+  --input data/processed/muestra_50k_con_co2.csv \
   --output data/processed/muestra_50k_co2_imputado.csv \
+  --missing-rate 20 \
   --sep , \
   --encoding utf-8
 ```
@@ -49,9 +64,9 @@ Salidas por defecto:
 
 Columnas agregadas en el CSV de salida:
 
-- EMISIONES_CO2_NUM: valor original convertido a numerico.
-- EMISIONES_CO2_IMPUTADA: valor final (real o estimado).
-- EMISIONES_CO2_ESTIMADA_POR_ML: 1 si fue imputado, 0 si ya venia informado.
+- EMISIONES_CO2_COMPLETA: valor original de CO2 (base completa).
+- EMISIONES_CO2_CON_MISSING_PCT: CO2 tras aplicar el porcentaje de missing.
+- EMISIONES_CO2_IMPUTADA: resultado final tras imputar los faltantes artificiales.
 
 ## Notas de calidad de datos
 

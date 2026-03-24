@@ -1,14 +1,16 @@
 import pandas as pd
 from sklearn.compose import ColumnTransformer
+from sklearn.model_selection import KFold, cross_validate
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
 
-def build_pipeline(feature_df: pd.DataFrame) -> tuple[Pipeline, list[str], list[str]]:
+def build_pipeline(
+  feature_df: pd.DataFrame,
+  random_state: int,
+) -> tuple[Pipeline, list[str], list[str]]:
   # Detecta dinamicamente tipos para aplicar preprocesado distinto por bloque.
   numeric_columns = [
     c for c in feature_df.columns if pd.api.types.is_numeric_dtype(feature_df[c])
@@ -42,7 +44,7 @@ def build_pipeline(feature_df: pd.DataFrame) -> tuple[Pipeline, list[str], list[
   )
 
   model = HistGradientBoostingRegressor(
-    random_state=42,
+    random_state=random_state,
     max_iter=350,
     learning_rate=0.05,
     max_depth=8,
@@ -63,26 +65,40 @@ def fit_and_evaluate(
   pipeline: Pipeline,
   x_known: pd.DataFrame,
   y_known: pd.Series,
-  test_size: float,
   random_state: int,
+  cv_folds: int,
 ) -> dict[str, float]:
-  # Evalua calidad antes de imputar para tener metrica real del modelo.
-  x_train, x_valid, y_train, y_valid = train_test_split(
-    x_known,
-    y_known,
-    test_size=test_size,
+  # Usa validacion cruzada para reducir la varianza de una sola particion.
+  cv = KFold(
+    n_splits=cv_folds,
+    shuffle=True,
     random_state=random_state,
   )
 
-  pipeline.fit(x_train, y_train)
-  y_pred = pipeline.predict(x_valid)
+  scores = cross_validate(
+    pipeline,
+    x_known,
+    y_known,
+    cv=cv,
+    scoring={
+      "mae": "neg_mean_absolute_error",
+      "rmse": "neg_root_mean_squared_error",
+      "r2": "r2",
+    },
+    n_jobs=-1,
+    return_train_score=False,
+  )
 
-  mae = mean_absolute_error(y_valid, y_pred)
-  rmse = mean_squared_error(y_valid, y_pred) ** 0.5
-  r2 = r2_score(y_valid, y_pred)
+  mae_values = -scores["test_mae"]
+  rmse_values = -scores["test_rmse"]
+  r2_values = scores["test_r2"]
 
   return {
-    "mae": float(mae),
-    "rmse": float(rmse),
-    "r2": float(r2),
+    "mae": float(mae_values.mean()),
+    "rmse": float(rmse_values.mean()),
+    "r2": float(r2_values.mean()),
+    "mae_std": float(mae_values.std(ddof=0)),
+    "rmse_std": float(rmse_values.std(ddof=0)),
+    "r2_std": float(r2_values.std(ddof=0)),
+    "cv_folds": int(cv_folds),
   }

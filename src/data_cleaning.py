@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 from pathlib import Path
 
 import numpy as np
@@ -25,15 +26,47 @@ KNOWN_NUMERIC_COLUMNS = [
   "PLAZAS_PIE",
 ]
 
+THOUSANDS_COMMA_RE = re.compile(r"^[+-]?\d{1,3}(,\d{3})+$")
+THOUSANDS_DOT_RE = re.compile(r"^[+-]?\d{1,3}(\.\d{3})+$")
+
+
+def _normalize_number_string(value: object) -> str:
+  # Normaliza numeros con separadores europeos/anglosajones sin alterar decimales.
+  if pd.isna(value):
+    return ""
+
+  text = str(value).strip().replace("\u00a0", "").replace(" ", "")
+  if not text:
+    return ""
+
+  has_comma = "," in text
+  has_dot = "." in text
+
+  if has_comma and has_dot:
+    # Si el ultimo separador es coma, asumimos coma decimal (formato europeo).
+    if text.rfind(",") > text.rfind("."):
+      return text.replace(".", "").replace(",", ".")
+    # Si el ultimo separador es punto, asumimos punto decimal.
+    return text.replace(",", "")
+
+  if has_comma:
+    if THOUSANDS_COMMA_RE.match(text):
+      return text.replace(",", "")
+    return text.replace(",", ".")
+
+  if has_dot and THOUSANDS_DOT_RE.match(text):
+    return text.replace(".", "")
+
+  return text
+
 
 def to_float_series(series: pd.Series) -> pd.Series:
-  # Normaliza formato europeo (miles con punto y decimal con coma) a float.
+  # Convierte texto a float soportando separadores de miles y decimales mixtos.
   cleaned = (
     series.astype(str)
     .str.strip()
     .replace({"": np.nan, "nan": np.nan, "None": np.nan})
-    .str.replace(".", "", regex=False)
-    .str.replace(",", ".", regex=False)
+    .map(_normalize_number_string)
   )
   return pd.to_numeric(cleaned, errors="coerce")
 
@@ -89,7 +122,8 @@ def _repaired_rows(path: Path, sep: str, encoding: str) -> tuple[list[list[str]]
     if not buffer:
       buffer = line.rstrip("\n")
     else:
-      buffer = f"{buffer} {line.lstrip().rstrip('\n')}"
+      stripped_line = line.lstrip().rstrip("\n")
+      buffer = f"{buffer} {stripped_line}"
 
     parsed = next(csv.reader([buffer], delimiter=sep))
 

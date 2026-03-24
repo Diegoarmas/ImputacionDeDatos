@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
   )
   parser.add_argument(
     "--output",
-    default="data/processed/dataset_limpio.csv",
+    default="data/processed/muestra_50k_con_co2.csv",
     help="Ruta del archivo de salida.",
   )
   parser.add_argument(
@@ -50,7 +50,23 @@ def build_parser() -> argparse.ArgumentParser:
     default="",
     help="Columnas separadas por coma a conservar. Si se omite, se conservan todas.",
   )
+  parser.add_argument(
+    "--target-column",
+    default="EMISIONES_CO2",
+    help="Columna objetivo usada para filtrar filas con valor informado.",
+  )
+  parser.add_argument(
+    "--keep-only-with-target",
+    action="store_true",
+    default=True,
+    help="Conserva solo filas con valor en la columna objetivo.",
+  )
   return parser
+
+
+def _has_value(series: pd.Series) -> pd.Series:
+  cleaned = series.astype(str).str.strip().str.lower()
+  return ~cleaned.isin({"", "nan", "none", "null"})
 
 
 def main() -> int:
@@ -62,6 +78,7 @@ def main() -> int:
 
   selected_columns = [c.strip() for c in args.columns.split(",") if c.strip()]
   total_rows = 0
+  kept_rows = 0
 
   try:
     reader = pd.read_csv(
@@ -85,6 +102,14 @@ def main() -> int:
           return 1
         chunk = chunk[selected_columns]
 
+      if args.keep_only_with_target:
+        if args.target_column not in chunk.columns:
+          print(
+            f"Error: no existe la columna objetivo {args.target_column} en la entrada."
+          )
+          return 1
+        chunk = chunk[_has_value(chunk[args.target_column])]
+
       mode = "w" if i == 0 else "a"
       write_header = i == 0
       chunk.to_csv(
@@ -97,7 +122,8 @@ def main() -> int:
       )
 
       total_rows += len(chunk)
-      print(f"Chunk {i}: {len(chunk)} filas procesadas")
+      kept_rows += len(chunk)
+      print(f"Chunk {i}: {len(chunk)} filas exportadas con {args.target_column} informado")
 
   except FileNotFoundError:
     print(f"Error: no se encontro el archivo de entrada: {args.input}")
@@ -112,7 +138,10 @@ def main() -> int:
     print(f"Error inesperado: {exc}")
     return 1
 
-  print(f"Proceso completado. Filas totales: {total_rows}. Salida: {output_path}")
+  print(
+    f"Proceso completado. Filas de salida con {args.target_column}: {kept_rows}. "
+    f"Salida: {output_path}"
+  )
   return 0
 
 
