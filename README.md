@@ -46,6 +46,7 @@ Comando recomendado:
   --input data/processed/muestra_50k_con_co2.csv \
   --output data/processed/muestra_50k_co2_imputado.csv \
   --missing-rate 20 \
+  --simplificado \
   --sep , \
   --encoding utf-8
 ```
@@ -59,6 +60,7 @@ Ayuda de opciones:
 Salidas por defecto:
 
 - CSV imputado: [data/processed/muestra_50k_co2_imputado.csv](data/processed/muestra_50k_co2_imputado.csv)
+- CSV simplificado (si usas `--simplificado`): [data/processed/datos_simpl.csv](data/processed/datos_simpl.csv)
 - Modelo: [artifacts/models/co2_model.joblib](artifacts/models/co2_model.joblib)
 - Metricas: [artifacts/metrics/co2_metrics.json](artifacts/metrics/co2_metrics.json)
 

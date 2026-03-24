@@ -69,6 +69,19 @@ def parse_args() -> argparse.Namespace:
       "Acepta 0.2 o 20 para 20%."
     ),
   )
+  parser.add_argument(
+    "--simplificado",
+    action="store_true",
+    help=(
+      "Genera un segundo CSV simplificado con solo filas donde se aplico "
+      "missing rate y su imputacion."
+    ),
+  )
+  parser.add_argument(
+    "--simplificado-output",
+    default="",
+    help="Ruta del CSV simplificado. Si se omite, usa data/processed/datos_simpl.csv.",
+  )
   return parser.parse_args()
 
 
@@ -87,10 +100,17 @@ def main() -> int:
 
   input_path = Path(args.input)
   output_path = Path(args.output)
+  simplified_output_path = (
+    Path(args.simplificado_output)
+    if args.simplificado_output
+    else Path("data/processed/datos_simpl.csv")
+  )
   model_output_path = Path(args.model_output)
   metrics_output_path = Path(args.metrics_output)
 
   output_path.parent.mkdir(parents=True, exist_ok=True)
+  if args.simplificado:
+    simplified_output_path.parent.mkdir(parents=True, exist_ok=True)
   model_output_path.parent.mkdir(parents=True, exist_ok=True)
   metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -132,7 +152,7 @@ def main() -> int:
 
   if missing_count > 0:
     masked_indexes = rng.choice(known_indexes.to_numpy(), size=missing_count, replace=False)
-    co2_with_missing.loc[masked_indexes] = np.nan
+    co2_with_missing.loc[masked_indexes] = np.nan # type: ignore
 
   known_mask = co2_with_missing.notna()
   missing_mask = co2_with_missing.isna()
@@ -188,6 +208,24 @@ def main() -> int:
 
   output_df.to_csv(output_path, index=False, sep=args.sep, encoding=args.encoding)
 
+  simplified_rows = 0
+  if args.simplificado:
+    simplified_df = output_df.loc[
+      missing_mask,
+      [
+        "EMISIONES_CO2_COMPLETA",
+        "EMISIONES_CO2_CON_MISSING_PCT",
+        "EMISIONES_CO2_IMPUTADA",
+      ],
+    ].copy()
+    simplified_rows = int(len(simplified_df))
+    simplified_df.to_csv(
+      simplified_output_path,
+      index=False,
+      sep=args.sep,
+      encoding=args.encoding,
+    )
+
   model_artifact = {
     "pipeline": pipeline,
     "feature_columns": list(features.columns),
@@ -213,6 +251,8 @@ def main() -> int:
     "cv_folds": int(args.cv_folds),
     "input": str(args.input),
     "output": str(output_path),
+    "simplified_output": str(simplified_output_path) if args.simplificado else "",
+    "rows_in_simplified_output": int(simplified_rows),
     "model_output": str(model_output_path),
   }
 
@@ -221,6 +261,8 @@ def main() -> int:
 
   print("Artefactos generados:")
   print(f"  CSV imputado: {output_path}")
+  if args.simplificado:
+    print(f"  CSV simplif.: {simplified_output_path}")
   print(f"  Modelo:       {model_output_path}")
   print(f"  Metricas:     {metrics_output_path}")
 
