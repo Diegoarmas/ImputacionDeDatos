@@ -1,0 +1,20 @@
+{
+  "rows_total": 50000,
+  "rows_complete_used": 50000,
+  "rows_with_missing_target": 0,
+  "train_rows": 40000,
+  "test_rows": 10000,
+  "train_masked_rows": 8000,
+  "test_masked_rows": 2000,
+  "trained_only_on_train_split": true,
+  "artificial_missing_only_on_target": true,
+  "missing_rate": 0.2,
+  "mae": 3.013483300364458,
+  "mse": 60.10132320177083,
+  "rmse": 7.752504318074956,
+  "r2": 0.9705097733097664,
+  "input": "data/processed/parque_vehiculos_complete_010.csv",
+  "complete_output": "results/dataset_completo_seleccionado.csv",
+  "output": "results/imputacion_resultado.csv",
+  "model_output": "results/co2_model.joblib"
+}

@@ -56,7 +56,7 @@ def build_pipeline(
       ("preprocessor", preprocessor),
       ("model", model),
     ]
-  )
+  , memory=None)
 
   return pipeline, numeric_columns, categorical_columns
 
