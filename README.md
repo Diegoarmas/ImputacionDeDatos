@@ -46,10 +46,16 @@ Comando recomendado:
   --input data/processed/muestra_50k_con_co2.csv \
   --output data/processed/muestra_50k_co2_imputado.csv \
   --missing-rate 20 \
+  --device cuda \
   --simplificado \
   --sep , \
   --encoding utf-8
 ```
+
+Notas de dispositivo:
+
+- `--device cuda`: usa GPU con XGBoost (recomendado si tienes NVIDIA compatible).
+- `--device cpu`: usa el modelo de scikit-learn en CPU.
 
 Ayuda de opciones:
 

@@ -70,6 +70,12 @@ def parse_args() -> argparse.Namespace:
     ),
   )
   parser.add_argument(
+    "--device",
+    choices=["cuda", "cpu"],
+    default="cuda",
+    help="Dispositivo para entrenar el modelo: cuda (GPU) o cpu.",
+  )
+  parser.add_argument(
     "--simplificado",
     action="store_true",
     help=(
@@ -165,10 +171,17 @@ def main() -> int:
     print("Error: --cv-folds debe ser al menos 2.")
     return 1
 
-  pipeline, numeric_columns, categorical_columns = build_pipeline(
-    features,
-    random_state=args.random_state,
-  )
+  try:
+    pipeline, numeric_columns, categorical_columns, model_backend = build_pipeline(
+      features,
+      random_state=args.random_state,
+      device=args.device,
+    )
+  except ImportError as exc:
+    print(f"Error: {exc}")
+    return 1
+
+  n_jobs_cv = 1 if args.device == "cuda" else -1
 
   x_known = features.loc[known_mask]
   y_known = co2_with_missing.loc[known_mask]
@@ -179,6 +192,7 @@ def main() -> int:
     y_known,
     random_state=args.random_state,
     cv_folds=args.cv_folds,
+    n_jobs_cv=n_jobs_cv,
   )
   mae = scores["mae"]
   rmse = scores["rmse"]
@@ -188,6 +202,7 @@ def main() -> int:
   r2_std = scores["r2_std"]
 
   print(f"Metricas de validacion cruzada ({args.cv_folds} folds):")
+  print(f"  Backend: {model_backend} (device={args.device})")
   print(f"  MAE:  {mae:.4f} +/- {mae_std:.4f}")
   print(f"  RMSE: {rmse:.4f} +/- {rmse_std:.4f}")
   print(f"  R2:   {r2:.4f} +/- {r2_std:.4f}")
@@ -234,6 +249,8 @@ def main() -> int:
     "target_column": TARGET_COLUMN,
     "separator": args.sep,
     "encoding": args.encoding,
+    "model_backend": model_backend,
+    "device": args.device,
   }
   joblib.dump(model_artifact, model_output_path)
 
@@ -249,6 +266,9 @@ def main() -> int:
     "rmse_std": float(rmse_std),
     "r2_std": float(r2_std),
     "cv_folds": int(args.cv_folds),
+    "model_backend": model_backend,
+    "device": args.device,
+    "cv_n_jobs": int(n_jobs_cv),
     "input": str(args.input),
     "output": str(output_path),
     "simplified_output": str(simplified_output_path) if args.simplificado else "",
