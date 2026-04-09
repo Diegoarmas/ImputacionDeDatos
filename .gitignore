@@ -3,4 +3,8 @@
 /coverage
 /.env
 /data/raw/parque_vehiculos_202503.txt
+/data/processed/pool
 /.venv
+/results
+/__pycache__
+*.pyc

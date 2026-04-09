@@ -1,9 +1,11 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Iterable
 
 import joblib
 import numpy as np
+import pandas as pd
 from data_cleaning import TARGET_COLUMN, load_csv_resilient, prepare_dataframe
 from modeling import build_pipeline, fit_and_evaluate
 
@@ -14,8 +16,18 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument(
     "--input",
-    default="data/processed/muestra_50k_con_co2.csv",
-    help="CSV de entrada.",
+    default="",
+    help="CSV de entrada individual. Si se omite, se usa --input-dir.",
+  )
+  parser.add_argument(
+    "--input-dir",
+    default="data/processed/pool",
+    help="Directorio con multiples CSV de entrada. Se concatenan todos los ficheros encontrados.",
+  )
+  parser.add_argument(
+    "--input-pattern",
+    default="*.csv",
+    help="Patron glob para filtrar ficheros dentro de --input-dir.",
   )
   parser.add_argument(
     "--output",
@@ -91,20 +103,42 @@ def parse_args() -> argparse.Namespace:
   return parser.parse_args()
 
 
-def _normalize_missing_rate(value: float) -> float:
-  if value < 0:
-    raise ValueError("--missing-rate no puede ser negativo.")
-  if value <= 1:
-    return value
-  if value <= 100:
-    return value / 100.0
-  raise ValueError("--missing-rate debe estar entre 0 y 1, o entre 0 y 100.")
+def _load_input_data(
+  input_path: Path,
+  input_dir: Path,
+  input_pattern: str,
+  sep: str,
+  encoding: str,
+) -> tuple[pd.DataFrame, list[Path]]:
+  if input_path.exists():
+    df = load_csv_resilient(
+      input_path,
+      sep=sep,
+      encoding=encoding,
+    )
+    return df, [input_path]
+
+  if not input_dir.exists() or not input_dir.is_dir():
+    raise FileNotFoundError(
+      f"No existe el archivo {input_path} ni el directorio de entrada {input_dir}"
+    )
+
+  input_files = sorted(
+    path for path in input_dir.glob(input_pattern) if path.is_file()
+  )
+  if not input_files:
+    raise FileNotFoundError(
+      f"No se encontraron ficheros con patron {input_pattern} en {input_dir}"
+    )
+
+  dataframes = [
+    load_csv_resilient(path, sep=sep, encoding=encoding) for path in input_files
+  ]
+  combined_df = pd.concat(dataframes, ignore_index=True)
+  return combined_df, input_files
 
 
-def main() -> int:
-  args = parse_args()
-
-  input_path = Path(args.input)
+def _build_output_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
   output_path = Path(args.output)
   simplified_output_path = (
     Path(args.simplificado_output)
@@ -120,16 +154,18 @@ def main() -> int:
   model_output_path.parent.mkdir(parents=True, exist_ok=True)
   metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-  if not input_path.exists():
-    print(f"Error: no existe el archivo {input_path}")
-    return 1
+  return output_path, simplified_output_path, model_output_path, metrics_output_path
 
-  df = load_csv_resilient(
-    input_path,
-    sep=args.sep,
-    encoding=args.encoding,
-  )
 
+def _train_and_generate_outputs(
+  df: pd.DataFrame,
+  args: argparse.Namespace,
+  loaded_inputs: list[Path],
+  output_path: Path,
+  simplified_output_path: Path,
+  model_output_path: Path,
+  metrics_output_path: Path,
+) -> int:
   if TARGET_COLUMN not in df.columns:
     print(f"Error: no existe la columna objetivo {TARGET_COLUMN}")
     return 1
@@ -147,7 +183,6 @@ def main() -> int:
     print("Error: hay muy pocas filas con EMISIONES_CO2 para entrenar.")
     return 1
 
-  # Aplica missing artificial sobre la serie completa de CO2 conocida.
   co2_complete = target.copy()
   co2_with_missing = co2_complete.copy()
 
@@ -157,8 +192,10 @@ def main() -> int:
   missing_count = min(missing_count, len(known_indexes))
 
   if missing_count > 0:
-    masked_indexes = rng.choice(known_indexes.to_numpy(), size=missing_count, replace=False)
-    co2_with_missing.loc[masked_indexes] = np.nan # type: ignore
+    masked_indexes = rng.choice(
+      known_indexes.to_numpy(), size=missing_count, replace=False
+    )
+    co2_with_missing.loc[masked_indexes] = np.nan  # type: ignore
 
   known_mask = co2_with_missing.notna()
   missing_mask = co2_with_missing.isna()
@@ -207,7 +244,6 @@ def main() -> int:
   print(f"  RMSE: {rmse:.4f} +/- {rmse_std:.4f}")
   print(f"  R2:   {r2:.4f} +/- {r2_std:.4f}")
 
-  # Reentrenamos con todas las filas conocidas para maximizar informacion.
   pipeline.fit(x_known, y_known)
 
   imputed_values = co2_with_missing.copy()
@@ -215,7 +251,6 @@ def main() -> int:
     x_missing = features.loc[missing_mask]
     imputed_values.loc[missing_mask] = pipeline.predict(x_missing)
 
-  # Conserva datos originales y agrega columnas solicitadas de objetivo/imputacion.
   output_df = df.copy()
   output_df["EMISIONES_CO2_COMPLETA"] = co2_complete
   output_df["EMISIONES_CO2_CON_MISSING_PCT"] = co2_with_missing
@@ -269,7 +304,11 @@ def main() -> int:
     "model_backend": model_backend,
     "device": args.device,
     "cv_n_jobs": int(n_jobs_cv),
-    "input": str(args.input),
+    "input": str(args.input) if args.input else "",
+    "input_dir": str(args.input_dir) if not args.input else "",
+    "input_pattern": args.input_pattern if not args.input else "",
+    "inputs_loaded": [str(path) for path in loaded_inputs],
+    "input_files_count": int(len(loaded_inputs)),
     "output": str(output_path),
     "simplified_output": str(simplified_output_path) if args.simplificado else "",
     "rows_in_simplified_output": int(simplified_rows),
@@ -287,6 +326,46 @@ def main() -> int:
   print(f"  Metricas:     {metrics_output_path}")
 
   return 0
+
+
+def _normalize_missing_rate(value: float) -> float:
+  if value < 0:
+    raise ValueError("--missing-rate no puede ser negativo.")
+  if value <= 1:
+    return value
+  if value <= 100:
+    return value / 100.0
+  raise ValueError("--missing-rate debe estar entre 0 y 1, o entre 0 y 100.")
+
+
+def main() -> int:
+  args = parse_args()
+
+  input_path = Path(args.input) if args.input else Path("__missing_input__")
+  input_dir = Path(args.input_dir)
+  output_path, simplified_output_path, model_output_path, metrics_output_path = _build_output_paths(args)
+
+  try:
+    df, loaded_inputs = _load_input_data(
+      input_path=input_path,
+      input_dir=input_dir,
+      input_pattern=args.input_pattern,
+      sep=args.sep,
+      encoding=args.encoding,
+    )
+  except FileNotFoundError as exc:
+    print(f"Error: {exc}")
+    return 1
+
+  return _train_and_generate_outputs(
+    df=df,
+    args=args,
+    loaded_inputs=loaded_inputs,
+    output_path=output_path,
+    simplified_output_path=simplified_output_path,
+    model_output_path=model_output_path,
+    metrics_output_path=metrics_output_path,
+  )
 
 
 if __name__ == "__main__":
