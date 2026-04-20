@@ -6,5 +6,10 @@
 /data/processed/pool
 /.venv
 /results
-/__pycache__
-*.pyc
+/src/__pycache__
+/src/*.pyc
+/src/*.pyo
+/src/*.pyd
+/results/plots/*
+/results/reports
+/results/tables

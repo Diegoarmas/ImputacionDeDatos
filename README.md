@@ -46,22 +46,39 @@ Comando recomendado:
   --input data/processed/muestra_50k_con_co2.csv \
   --output data/processed/muestra_50k_co2_imputado.csv \
   --missing-rate 20 \
-  --device cuda \
   --simplificado \
   --sep , \
   --encoding utf-8
 ```
 
-Notas de dispositivo:
+Entrenamiento desde pool de muestras (seleccion aleatoria por ejecucion):
 
-- `--device cuda`: usa GPU con XGBoost (recomendado si tienes NVIDIA compatible).
-- `--device cpu`: usa el modelo de scikit-learn en CPU.
+```bash
+./.venv/bin/python src/imputacion_co2_ml.py \
+  --pool-dir data/processed/pool \
+  --pool-pattern '*.csv' \
+  --missing-rate 20 \
+  --simplificado
+```
+
+Directorio de pool recomendado para almacenar muestras:
+
+- [data/processed/pool](data/processed/pool)
 
 Ayuda de opciones:
 
 ```bash
 ./.venv/bin/python src/imputacion_co2_ml.py --help
 ```
+
+Hiperparametros del modelo configurables por CLI:
+
+- --max-iter (default: 350)
+- --learning-rate (default: 0.05)
+- --max-depth (default: 8, usa -1 para sin limite)
+- --min-samples-leaf (default: 20)
+- --pool-dir (si se define, ignora --input y elige una muestra aleatoria del pool)
+- --pool-pattern (default: *.csv)
 
 Salidas por defecto:
 
@@ -85,10 +102,28 @@ El modulo [src/results_pipeline.py](src/results_pipeline.py) crea automaticament
 - Graficas MSE y MAE vs missing rate.
 - Log con fecha, imputadores, missing rates y numero de experimentos.
 
-Comando:
+Por defecto, toma metricas reales desde
+[artifacts/metrics/co2_metrics.json](artifacts/metrics/co2_metrics.json)
+(generado por [src/imputacion_co2_ml.py](src/imputacion_co2_ml.py)) y construye
+las tablas/plots para el modelo unico actual (`HistGradientBoostingRegressor`).
+
+Comando (modo real por defecto):
 
 ```bash
 ./.venv/bin/python src/results_pipeline.py
+```
+
+CSV real de resultados (si se define, tiene prioridad sobre --mode):
+
+```bash
+./.venv/bin/python src/results_pipeline.py \
+  --input results/tables/experiment_results.csv
+```
+
+Modo demo (datos ficticios de ejemplo):
+
+```bash
+./.venv/bin/python src/results_pipeline.py --mode demo
 ```
 
 Salidas:
@@ -106,6 +141,8 @@ Salidas:
 Archivo: [results/tables/experiment_results.csv](results/tables/experiment_results.csv)
 
 - Cada fila representa un experimento (`imputer`, `missing_rate`, `mse`, `mae`).
+- En el flujo actual, normalmente veras una sola fila/modelo
+  (`HistGradientBoostingRegressor`) en modo real.
 - Menor `mse` y menor `mae` significan mejor imputacion.
 - Sirve para comparar metodos en un missing rate especifico.
 

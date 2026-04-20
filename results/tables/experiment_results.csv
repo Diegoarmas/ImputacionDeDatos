@@ -1,7 +1,2 @@
 imputer,missing_rate,mse,mae
-iterative,0.05,0.06,0.13
-iterative,0.1,0.09,0.17
-knn,0.05,0.08,0.16
-knn,0.1,0.11,0.19
-mean,0.05,0.12,0.21
-mean,0.1,0.16,0.25
+sklearn-hgbt-cpu,0.1,427.5036732205372,8.184894752390592
