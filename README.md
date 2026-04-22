@@ -7,8 +7,11 @@ Pipeline en Python para imputar valores faltantes de EMISIONES_CO2 en datos de v
 - [src/imputacion_co2_ml.py](src/imputacion_co2_ml.py): script principal (orquesta carga, entrenamiento, imputacion y guardado).
 - [src/data_cleaning.py](src/data_cleaning.py): funciones de limpieza y reparacion de CSV malformado.
 - [src/modeling.py](src/modeling.py): construccion del pipeline y evaluacion del modelo.
-- [src/depuracion_txt.py](src/depuracion_txt.py): utilidades para depurar/convertir TXT por bloques.
-- [data/processed/muestra_50k.csv](data/processed/muestra_50k.csv): dataset de entrada para imputacion.
+- [src/depuracion_txt.py](src/depuracion_txt.py): utilidades para depurar/convertir TXT por bloques y separar train/test.
+- [generate_pools.sh](generate_pools.sh): script para generar automáticamente pools separados train/test.
+- [data/raw/](data/raw/): datos originales (parque_vehiculos_202503.txt)
+- [data/processed/pool_train/](data/processed/pool_train/): muestras para **ENTRENAMIENTO** (80%)
+- [data/processed/pool_test/](data/processed/pool_test/): muestras para **PRUEBA** (20%, sin overlap con train)
 - [artifacts/models/](artifacts/models/): modelos serializados.
 - [artifacts/metrics/](artifacts/metrics/): metricas en JSON.
 
@@ -23,75 +26,75 @@ Instalacion:
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-## Paso 1: depurar desde raw (solo filas con CO2 informado)
+## Paso 1: Generar pools separados de TRAIN y TEST
 
-Comando recomendado:
+**Nuevo flujo recomendado**: Separar automáticamente los datos en pool_train (80%) y pool_test (20%) 
+para garantizar que no haya overlap entre entrenamiento y evaluación.
+
+### Opción A: Usando el script automatizado (recomendado)
+
+```bash
+chmod +x generate_pools.sh
+./generate_pools.sh
+```
+
+Esto genera:
+- `data/processed/pool_train/`: ~80% de los datos para entrenar
+- `data/processed/pool_test/`: ~20% de los datos para evaluar
+
+La separación es **determinística** basada en el índice de fila, garantizando reproducibilidad y sin overlap.
+
+### Opción B: Comando manual
 
 ```bash
 ./.venv/bin/python src/depuracion_txt.py \
-  --input data/raw/muestra_50k.txt \
-  --output data/processed/muestra_50k_con_co2.csv \
+  --input data/raw/parque_vehiculos_202503.txt \
+  --pool-dir data/processed/pool_train \
+  --pool-test-dir data/processed/pool_test \
+  --train-ratio 0.8 \
+  --rows-per-sample 100000 \
+  --keep-remainder \
   --in-sep '|' \
-  --out-sep ,
+  --out-sep ',' \
+  --in-encoding 'iso-8859-1' \
+  --out-encoding 'utf-8'
 ```
 
-Este paso genera un CSV en el que solo se conservan filas con valor en `EMISIONES_CO2`.
+Parámetros clave:
+- `--train-ratio`: proporción de datos para entrenamiento (default: 0.8 = 80% train, 20% test)
+- `--pool-dir`: directorio de salida para pool de ENTRENAMIENTO
+- `--pool-test-dir`: directorio de salida para pool de PRUEBA
+- `--keep-remainder`: guarda las filas restantes que no completan una muestra
 
-## Paso 2: entrenar e imputar aplicando % de missing artificial
+## Paso 2: Entrenar e imputar con datos de TRAIN
 
-Comando recomendado:
+Entrenar el modelo **solo** con pool_train (sin tocar pool_test):
 
 ```bash
 ./.venv/bin/python src/imputacion_co2_ml.py \
-  --input data/processed/muestra_50k_con_co2.csv \
-  --output data/processed/muestra_50k_co2_imputado.csv \
+  --input-dir data/processed/pool_train \
+  --test-dir data/processed/pool_test \
   --missing-rate 20 \
   --simplificado \
-  --sep , \
+  --sep ',' \
   --encoding utf-8
 ```
 
-Entrenamiento desde pool de muestras (seleccion aleatoria por ejecucion):
+Parámetros clave:
+- `--input-dir`: pool de ENTRENAMIENTO (default: `data/processed/pool_train`)
+- `--test-dir`: pool de TEST **separado** para evaluar el modelo final (opcional pero recomendado)
+- `--missing-rate`: porcentaje de CO2 a ocultar para imputación artificial
+- `--simplificado`: genera CSV con solo filas imputadas
 
-```bash
-./.venv/bin/python src/imputacion_co2_ml.py \
-  --pool-dir data/processed/pool \
-  --pool-pattern '*.csv' \
-  --missing-rate 20 \
-  --simplificado
-```
+**Salidas generadas**:
+- Modelo entrenado: `artifacts/models/co2_model.joblib`
+- Métricas (incluyendo test): `artifacts/metrics/co2_metrics.json`
+- CSV imputado (train): `data/processed/muestra_50k_co2_imputado.csv`
+- CSV simplificado: `data/processed/datos_simpl.csv` (si `--simplificado`)
 
-Directorio de pool recomendado para almacenar muestras:
-
-- [data/processed/pool](data/processed/pool)
-
-Ayuda de opciones:
-
-```bash
-./.venv/bin/python src/imputacion_co2_ml.py --help
-```
-
-Hiperparametros del modelo configurables por CLI:
-
-- --max-iter (default: 350)
-- --learning-rate (default: 0.05)
-- --max-depth (default: 8, usa -1 para sin limite)
-- --min-samples-leaf (default: 20)
-- --pool-dir (si se define, ignora --input y elige una muestra aleatoria del pool)
-- --pool-pattern (default: *.csv)
-
-Salidas por defecto:
-
-- CSV imputado: [data/processed/muestra_50k_co2_imputado.csv](data/processed/muestra_50k_co2_imputado.csv)
-- CSV simplificado (si usas `--simplificado`): [data/processed/datos_simpl.csv](data/processed/datos_simpl.csv)
-- Modelo: [artifacts/models/co2_model.joblib](artifacts/models/co2_model.joblib)
-- Metricas: [artifacts/metrics/co2_metrics.json](artifacts/metrics/co2_metrics.json)
-
-Columnas agregadas en el CSV de salida:
-
-- EMISIONES_CO2_COMPLETA: valor original de CO2 (base completa).
-- EMISIONES_CO2_CON_MISSING_PCT: CO2 tras aplicar el porcentaje de missing.
-- EMISIONES_CO2_IMPUTADA: resultado final tras imputar los faltantes artificiales.
+Las métricas JSON incluirán:
+- Métricas de validación cruzada (train)
+- Métricas de evaluación en test set (si `--test-dir` se proporciona)
 
 ## Paso 3: generar tablas, graficas y log de experimentos
 

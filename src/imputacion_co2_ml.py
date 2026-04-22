@@ -1,7 +1,7 @@
 import argparse
 import json
+from collections import Counter
 from pathlib import Path
-from typing import Iterable
 
 import joblib
 import numpy as np
@@ -12,7 +12,7 @@ from modeling import build_pipeline, fit_and_evaluate
 
 def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(
-    description="Entrena un modelo para imputar EMISIONES_CO2 faltantes."
+    description="Entrena modelo de imputacion con splits train/val/test."
   )
   parser.add_argument(
     "--input",
@@ -21,84 +21,102 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument(
     "--input-dir",
-    default="data/processed/pool",
-    help="Directorio con multiples CSV de entrada. Se concatenan todos los ficheros encontrados.",
+    default="data/processed/pool_train",
+    help="Directorio de entrenamiento.",
   )
   parser.add_argument(
     "--input-pattern",
     default="*.csv",
-    help="Patron glob para filtrar ficheros dentro de --input-dir.",
+    help="Patron glob para train.",
+  )
+  parser.add_argument(
+    "--val-dir",
+    default="data/processed/pool_val",
+    help="Directorio de validacion (opcional).",
+  )
+  parser.add_argument(
+    "--val-pattern",
+    default="*.csv",
+    help="Patron glob para validacion.",
+  )
+  parser.add_argument(
+    "--test-dir",
+    default="data/processed/pool_test",
+    help="Directorio de test (opcional).",
+  )
+  parser.add_argument(
+    "--test-pattern",
+    default="*.csv",
+    help="Patron glob para test.",
+  )
+  parser.add_argument(
+    "--period-column",
+    default="FECHA_MATR",
+    help="Columna de fecha para analizar periodos de train/val/test.",
+  )
+  parser.add_argument(
+    "--period-report-output",
+    default="artifacts/metrics/period_split_report.json",
+    help="Ruta de salida del reporte de periodos temporales.",
   )
   parser.add_argument(
     "--output",
     default="data/processed/muestra_50k_co2_imputado.csv",
-    help="CSV de salida con imputaciones.",
+    help="CSV de salida con imputaciones sobre train.",
   )
   parser.add_argument(
     "--sep",
     default=",",
-    help="Separador del CSV de entrada y salida.",
+    help="Separador de CSV.",
   )
   parser.add_argument(
     "--encoding",
     default="utf-8",
-    help="Codificacion del CSV de entrada y salida.",
+    help="Codificacion de CSV.",
   )
   parser.add_argument(
     "--model-output",
     default="artifacts/models/co2_model.joblib",
-    help="Ruta para guardar el modelo entrenado.",
+    help="Ruta del modelo entrenado.",
   )
   parser.add_argument(
     "--metrics-output",
     default="artifacts/metrics/co2_metrics.json",
-    help="Ruta para guardar metricas en JSON.",
-  )
-  parser.add_argument(
-    "--test-size",
-    type=float,
-    default=0.2,
-    help="Parametro legado (sin uso): ahora se evalua con validacion cruzada.",
+    help="Ruta de metricas JSON.",
   )
   parser.add_argument(
     "--cv-folds",
     type=int,
     default=5,
-    help="Numero de folds para validacion cruzada.",
+    help="Numero de folds para CV en train.",
   )
   parser.add_argument(
     "--random-state",
     type=int,
     default=42,
-    help="Semilla para reproducibilidad.",
+    help="Semilla de reproducibilidad.",
   )
   parser.add_argument(
     "--missing-rate",
     type=float,
     default=0.2,
-    help=(
-      "Porcentaje/proporcion de EMISIONES_CO2 a ocultar para imputar. "
-      "Acepta 0.2 o 20 para 20%."
-    ),
+    help="Porcentaje/proporcion de missing artificial para imputacion en train.",
   )
   parser.add_argument(
     "--device",
     choices=["cuda", "cpu"],
     default="cuda",
-    help="Dispositivo para entrenar el modelo: cuda (GPU) o cpu.",
+    help="Dispositivo para entrenamiento.",
   )
   parser.add_argument(
     "--simplificado",
     action="store_true",
-    help=(
-      "Genera un segundo CSV simplificado con solo filas donde se aplico "
-      "missing rate y su imputacion."
-    ),
+    help="Genera CSV simplificado con filas imputadas.",
   )
   parser.add_argument(
     "--simplificado-output",
     default="",
-    help="Ruta del CSV simplificado. Si se omite, usa data/processed/datos_simpl.csv.",
+    help="Ruta de CSV simplificado.",
   )
   return parser.parse_args()
 
@@ -111,34 +129,26 @@ def _load_input_data(
   encoding: str,
 ) -> tuple[pd.DataFrame, list[Path]]:
   if input_path.exists():
-    df = load_csv_resilient(
-      input_path,
-      sep=sep,
-      encoding=encoding,
-    )
+    df = load_csv_resilient(input_path, sep=sep, encoding=encoding)
     return df, [input_path]
 
   if not input_dir.exists() or not input_dir.is_dir():
     raise FileNotFoundError(
-      f"No existe el archivo {input_path} ni el directorio de entrada {input_dir}"
+      f"No existe el archivo {input_path} ni el directorio {input_dir}"
     )
 
-  input_files = sorted(
-    path for path in input_dir.glob(input_pattern) if path.is_file()
-  )
+  input_files = sorted(path for path in input_dir.glob(input_pattern) if path.is_file())
   if not input_files:
     raise FileNotFoundError(
       f"No se encontraron ficheros con patron {input_pattern} en {input_dir}"
     )
 
-  dataframes = [
-    load_csv_resilient(path, sep=sep, encoding=encoding) for path in input_files
-  ]
+  dataframes = [load_csv_resilient(path, sep=sep, encoding=encoding) for path in input_files]
   combined_df = pd.concat(dataframes, ignore_index=True)
   return combined_df, input_files
 
 
-def _build_output_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path]:
+def _build_output_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Path, Path]:
   output_path = Path(args.output)
   simplified_output_path = (
     Path(args.simplificado_output)
@@ -147,18 +157,102 @@ def _build_output_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Pat
   )
   model_output_path = Path(args.model_output)
   metrics_output_path = Path(args.metrics_output)
+  period_report_output_path = Path(args.period_report_output)
 
   output_path.parent.mkdir(parents=True, exist_ok=True)
   if args.simplificado:
     simplified_output_path.parent.mkdir(parents=True, exist_ok=True)
   model_output_path.parent.mkdir(parents=True, exist_ok=True)
   metrics_output_path.parent.mkdir(parents=True, exist_ok=True)
+  period_report_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-  return output_path, simplified_output_path, model_output_path, metrics_output_path
+  return (
+    output_path,
+    simplified_output_path,
+    model_output_path,
+    metrics_output_path,
+    period_report_output_path,
+  )
+
+
+def _normalize_missing_rate(value: float) -> float:
+  if value < 0:
+    raise ValueError("--missing-rate no puede ser negativo.")
+  if value <= 1:
+    return value
+  if value <= 100:
+    return value / 100.0
+  raise ValueError("--missing-rate debe estar entre 0 y 1, o entre 0 y 100.")
+
+
+def _period_stats(df: pd.DataFrame, period_column: str, target_column: str) -> dict:
+  stats = {
+    "rows_total": int(len(df)),
+    "rows_with_target": int(df[target_column].notna().sum()) if target_column in df.columns else 0,
+    "period_column": period_column,
+    "date_min": None,
+    "date_max": None,
+    "year_distribution": {},
+  }
+
+  if period_column not in df.columns:
+    return stats
+
+  parsed = pd.to_datetime(df[period_column], dayfirst=True, errors="coerce")
+  valid = parsed.dropna()
+  if valid.empty:
+    return stats
+
+  stats["date_min"] = valid.min().strftime("%Y-%m-%d")
+  stats["date_max"] = valid.max().strftime("%Y-%m-%d")
+
+  year_counts = Counter(valid.dt.year.astype(int).tolist())
+  stats["year_distribution"] = {
+    str(year): count for year, count in sorted(year_counts.items())
+  }
+  return stats
+
+
+def _evaluate_on_dataset(
+  model_artifact: dict,
+  eval_df: pd.DataFrame,
+  dataset_name: str,
+) -> dict:
+  from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+  pipeline = model_artifact["pipeline"]
+  feature_columns = model_artifact["feature_columns"]
+
+  if TARGET_COLUMN not in eval_df.columns:
+    return {}
+
+  features, target = prepare_dataframe(eval_df)
+  valid_mask = target.notna()
+  if valid_mask.sum() < 10:
+    print(
+      f"Advertencia: muy pocas filas con {TARGET_COLUMN} en {dataset_name} ({valid_mask.sum()})"
+    )
+    return {}
+
+  x_eval = features.loc[valid_mask].reindex(columns=feature_columns)
+  y_eval = target.loc[valid_mask]
+  y_pred = pipeline.predict(x_eval)
+
+  mae = float(mean_absolute_error(y_eval, y_pred))
+  rmse = float(np.sqrt(mean_squared_error(y_eval, y_pred)))
+  r2 = float(r2_score(y_eval, y_pred))
+
+  return {
+    f"{dataset_name}_mae": mae,
+    f"{dataset_name}_rmse": rmse,
+    f"{dataset_name}_r2": r2,
+    f"{dataset_name}_rows_total": int(len(eval_df)),
+    f"{dataset_name}_rows_with_target": int(valid_mask.sum()),
+  }
 
 
 def _train_and_generate_outputs(
-  df: pd.DataFrame,
+  train_df: pd.DataFrame,
   args: argparse.Namespace,
   loaded_inputs: list[Path],
   output_path: Path,
@@ -166,7 +260,7 @@ def _train_and_generate_outputs(
   model_output_path: Path,
   metrics_output_path: Path,
 ) -> int:
-  if TARGET_COLUMN not in df.columns:
+  if TARGET_COLUMN not in train_df.columns:
     print(f"Error: no existe la columna objetivo {TARGET_COLUMN}")
     return 1
 
@@ -176,8 +270,7 @@ def _train_and_generate_outputs(
     print(f"Error: {exc}")
     return 1
 
-  features, target = prepare_dataframe(df)
-
+  features, target = prepare_dataframe(train_df)
   full_target_mask = target.notna()
   if full_target_mask.sum() < 100:
     print("Error: hay muy pocas filas con EMISIONES_CO2 para entrenar.")
@@ -192,9 +285,7 @@ def _train_and_generate_outputs(
   missing_count = min(missing_count, len(known_indexes))
 
   if missing_count > 0:
-    masked_indexes = rng.choice(
-      known_indexes.to_numpy(), size=missing_count, replace=False
-    )
+    masked_indexes = rng.choice(known_indexes.to_numpy(), size=missing_count, replace=False)
     co2_with_missing.loc[masked_indexes] = np.nan  # type: ignore
 
   known_mask = co2_with_missing.notna()
@@ -219,7 +310,6 @@ def _train_and_generate_outputs(
     return 1
 
   n_jobs_cv = 1 if args.device == "cuda" else -1
-
   x_known = features.loc[known_mask]
   y_known = co2_with_missing.loc[known_mask]
 
@@ -231,18 +321,12 @@ def _train_and_generate_outputs(
     cv_folds=args.cv_folds,
     n_jobs_cv=n_jobs_cv,
   )
-  mae = scores["mae"]
-  rmse = scores["rmse"]
-  r2 = scores["r2"]
-  mae_std = scores["mae_std"]
-  rmse_std = scores["rmse_std"]
-  r2_std = scores["r2_std"]
 
-  print(f"Metricas de validacion cruzada ({args.cv_folds} folds):")
+  print(f"Metricas CV train ({args.cv_folds} folds):")
   print(f"  Backend: {model_backend} (device={args.device})")
-  print(f"  MAE:  {mae:.4f} +/- {mae_std:.4f}")
-  print(f"  RMSE: {rmse:.4f} +/- {rmse_std:.4f}")
-  print(f"  R2:   {r2:.4f} +/- {r2_std:.4f}")
+  print(f"  MAE:  {scores['mae']:.4f} +/- {scores['mae_std']:.4f}")
+  print(f"  RMSE: {scores['rmse']:.4f} +/- {scores['rmse_std']:.4f}")
+  print(f"  R2:   {scores['r2']:.4f} +/- {scores['r2_std']:.4f}")
 
   pipeline.fit(x_known, y_known)
 
@@ -251,11 +335,10 @@ def _train_and_generate_outputs(
     x_missing = features.loc[missing_mask]
     imputed_values.loc[missing_mask] = pipeline.predict(x_missing)
 
-  output_df = df.copy()
+  output_df = train_df.copy()
   output_df["EMISIONES_CO2_COMPLETA"] = co2_complete
   output_df["EMISIONES_CO2_CON_MISSING_PCT"] = co2_with_missing
   output_df["EMISIONES_CO2_IMPUTADA"] = imputed_values.round(3)
-
   output_df.to_csv(output_path, index=False, sep=args.sep, encoding=args.encoding)
 
   simplified_rows = 0
@@ -290,16 +373,16 @@ def _train_and_generate_outputs(
   joblib.dump(model_artifact, model_output_path)
 
   metrics = {
-    "rows_total": int(len(df)),
+    "rows_total": int(len(train_df)),
     "rows_with_known_target": int(full_target_mask.sum()),
     "rows_with_missing_applied": int(missing_mask.sum()),
     "missing_rate": float(missing_rate),
-    "mae": float(mae),
-    "rmse": float(rmse),
-    "r2": float(r2),
-    "mae_std": float(mae_std),
-    "rmse_std": float(rmse_std),
-    "r2_std": float(r2_std),
+    "mae": float(scores["mae"]),
+    "rmse": float(scores["rmse"]),
+    "r2": float(scores["r2"]),
+    "mae_std": float(scores["mae_std"]),
+    "rmse_std": float(scores["rmse_std"]),
+    "r2_std": float(scores["r2_std"]),
     "cv_folds": int(args.cv_folds),
     "model_backend": model_backend,
     "device": args.device,
@@ -328,27 +411,32 @@ def _train_and_generate_outputs(
   return 0
 
 
-def _normalize_missing_rate(value: float) -> float:
-  if value < 0:
-    raise ValueError("--missing-rate no puede ser negativo.")
-  if value <= 1:
-    return value
-  if value <= 100:
-    return value / 100.0
-  raise ValueError("--missing-rate debe estar entre 0 y 1, o entre 0 y 100.")
+def _update_json(path: Path, updates: dict) -> None:
+  with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+  payload.update(updates)
+  with open(path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
 def main() -> int:
   args = parse_args()
 
+  (
+    output_path,
+    simplified_output_path,
+    model_output_path,
+    metrics_output_path,
+    period_report_output_path,
+  ) = _build_output_paths(args)
+
   input_path = Path(args.input) if args.input else Path("__missing_input__")
-  input_dir = Path(args.input_dir)
-  output_path, simplified_output_path, model_output_path, metrics_output_path = _build_output_paths(args)
+  train_dir = Path(args.input_dir)
 
   try:
-    df, loaded_inputs = _load_input_data(
+    train_df, train_inputs = _load_input_data(
       input_path=input_path,
-      input_dir=input_dir,
+      input_dir=train_dir,
       input_pattern=args.input_pattern,
       sep=args.sep,
       encoding=args.encoding,
@@ -357,15 +445,94 @@ def main() -> int:
     print(f"Error: {exc}")
     return 1
 
-  return _train_and_generate_outputs(
-    df=df,
+  train_result = _train_and_generate_outputs(
+    train_df=train_df,
     args=args,
-    loaded_inputs=loaded_inputs,
+    loaded_inputs=train_inputs,
     output_path=output_path,
     simplified_output_path=simplified_output_path,
     model_output_path=model_output_path,
     metrics_output_path=metrics_output_path,
   )
+  if train_result != 0:
+    return train_result
+
+  period_report = {
+    "train": _period_stats(train_df, args.period_column, TARGET_COLUMN),
+    "period_column": args.period_column,
+  }
+
+  model_artifact = joblib.load(model_output_path)
+
+  val_dir = Path(args.val_dir)
+  if args.val_dir and val_dir.exists() and val_dir.is_dir():
+    try:
+      val_df, val_inputs = _load_input_data(
+        input_path=Path("__missing_input__"),
+        input_dir=val_dir,
+        input_pattern=args.val_pattern,
+        sep=args.sep,
+        encoding=args.encoding,
+      )
+      val_metrics = _evaluate_on_dataset(model_artifact, val_df, "val")
+      if val_metrics:
+        print("\n=== Evaluacion en VALIDACION ===")
+        print(f"MAE={val_metrics['val_mae']:.4f} RMSE={val_metrics['val_rmse']:.4f} R2={val_metrics['val_r2']:.4f}")
+        _update_json(
+          metrics_output_path,
+          {
+            **val_metrics,
+            "val_dir": str(val_dir),
+            "val_pattern": args.val_pattern,
+            "val_inputs_loaded": [str(p) for p in val_inputs],
+          },
+        )
+      period_report["val"] = _period_stats(val_df, args.period_column, TARGET_COLUMN)
+    except FileNotFoundError as exc:
+      print(f"Advertencia: no se pudo cargar validacion: {exc}")
+
+  test_dir = Path(args.test_dir)
+  if args.test_dir and test_dir.exists() and test_dir.is_dir():
+    try:
+      test_df, test_inputs = _load_input_data(
+        input_path=Path("__missing_input__"),
+        input_dir=test_dir,
+        input_pattern=args.test_pattern,
+        sep=args.sep,
+        encoding=args.encoding,
+      )
+      test_metrics = _evaluate_on_dataset(model_artifact, test_df, "test")
+      if test_metrics:
+        print("\n=== Evaluacion en TEST ===")
+        print(f"MAE={test_metrics['test_mae']:.4f} RMSE={test_metrics['test_rmse']:.4f} R2={test_metrics['test_r2']:.4f}")
+        _update_json(
+          metrics_output_path,
+          {
+            **test_metrics,
+            "test_dir": str(test_dir),
+            "test_pattern": args.test_pattern,
+            "test_inputs_loaded": [str(p) for p in test_inputs],
+          },
+        )
+      period_report["test"] = _period_stats(test_df, args.period_column, TARGET_COLUMN)
+    except FileNotFoundError as exc:
+      print(f"Advertencia: no se pudo cargar test: {exc}")
+
+  with open(period_report_output_path, "w", encoding="utf-8") as f:
+    json.dump(period_report, f, ensure_ascii=False, indent=2)
+
+  _update_json(
+    metrics_output_path,
+    {
+      "period_column": args.period_column,
+      "period_report_output": str(period_report_output_path),
+    },
+  )
+
+  print("\nReporte temporal generado:")
+  print(f"  {period_report_output_path}")
+
+  return 0
 
 
 if __name__ == "__main__":
