@@ -14,6 +14,7 @@ Pipeline en Python para imputar valores faltantes de EMISIONES_CO2 en datos de v
 - [data/processed/pool_test/](data/processed/pool_test/): muestras para **PRUEBA** (20%, sin overlap con train)
 - [artifacts/models/](artifacts/models/): modelos serializados.
 - [artifacts/metrics/](artifacts/metrics/): metricas en JSON.
+- [tests/](tests/): tests unitarios para los modulos principales.
 
 ## Requisitos
 
@@ -190,4 +191,12 @@ Archivo: [results/logs/experiment_log.txt](results/logs/experiment_log.txt)
 
 - El cargador en [src/data_cleaning.py](src/data_cleaning.py) intenta leer el CSV de forma estandar.
 - Si encuentra filas partidas o malformadas, aplica una reparacion de respaldo para continuar el proceso.
+
+## Tests
+
+Ejecutar tests unitarios:
+
+```bash
+python -m pytest tests/ -v
+```
 

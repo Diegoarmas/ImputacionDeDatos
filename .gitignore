@@ -5,17 +5,33 @@
 /data/raw/parque_vehiculos_202503.txt
 /data/processed/pool*
 /.venv
+
 # Python cache
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+
+# Generated data files
+muestra_imputada.csv
+data/processed/muestra_50k_co2_imputado.csv
+data/processed/datos_simpl.csv
+
+# Results and plots
 /results
+/results/plots/*
+/results/reports
+/results/tables
 /src/__pycache__/*.pyc
 /src/__pycache__/*.pyo
 /src/__pycache__/*.pyd
 /src/*.pyc
 /src/*.pyo
 /src/*.pyd
-/results/plots/*
-/results/reports
-/results/tables
+
+# Model artifacts
+artifacts/models/*.joblib
+
+# Test coverage
+.coverage
+htmlcov/
