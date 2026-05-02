@@ -4,3 +4,20 @@
 /.env
 /data/raw/parque_vehiculos_202503.txt
 /.venv
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Generated data files
+muestra_imputada.csv
+data/processed/muestra_50k_co2_imputado.csv
+data/processed/datos_simpl.csv
+
+# Model artifacts
+artifacts/models/*.joblib
+
+# Test coverage
+.coverage
+htmlcov/
