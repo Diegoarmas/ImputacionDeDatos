@@ -1,3 +1,5 @@
+[![CI](https://github.com/Diegoarmas/ImputacionDeDatos/actions/workflows/ci.yml/badge.svg)](https://github.com/Diegoarmas/ImputacionDeDatos/actions/workflows/ci.yml)
+
 # ImputacionDeDatos
 
 Pipeline en Python para imputar valores faltantes de EMISIONES_CO2 en datos de vehiculos.
