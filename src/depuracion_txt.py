@@ -5,6 +5,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -174,7 +175,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _has_value(series: pd.Series) -> pd.Series:
   cleaned = series.fillna("").astype(str).str.strip().str.lower()
-  return ~cleaned.isin({"", "nan", "none", "null", "<na>"})
+  has_value = ~cleaned.isin({"", "nan", "none", "null", "<na>"})
+  # Excluye valores de 0
+  try:
+    numeric_series = pd.to_numeric(series, errors="coerce")
+    is_nonzero = numeric_series != 0
+    return has_value & is_nonzero
+  except Exception:
+    return has_value
 
 
 def _validate_args(args: argparse.Namespace) -> None:
@@ -258,19 +266,6 @@ def _write_single_chunk(
     encoding=out_encoding,
   )
 
-
-def _split_name_for_index(
-  global_row_index: int,
-  train_threshold: int,
-  val_threshold: int,
-) -> str:
-  # 10_000 buckets da precision suficiente para ratios como 0.733
-  bucket = global_row_index % 10_000
-  if bucket < train_threshold:
-    return "train"
-  if bucket < val_threshold:
-    return "val"
-  return "test"
 
 
 def _update_period_stats_for_split(
@@ -395,19 +390,17 @@ def main() -> int:
         print(f"Chunk {i}: 0 filas utiles")
         continue
 
-      split_rows = {"train": [], "val": [], "test": []}
-      for _, row in chunk.iterrows():
-        split_name = _split_name_for_index(
-          global_row_index=global_row_index,
-          train_threshold=train_threshold,
-          val_threshold=val_threshold,
-        )
-        split_rows[split_name].append(row)
-        global_row_index += 1
-
+      n = len(chunk)
+      buckets = (global_row_index + np.arange(n)) % 10_000
+      global_row_index += n
+      labels = np.where(
+        buckets < train_threshold, "train",
+        np.where(buckets < val_threshold, "val", "test"),
+      )
+      chunk_indexed = chunk.reset_index(drop=True)
       split_frames = {
-        k: pd.DataFrame(v) if v else pd.DataFrame(columns=chunk.columns)
-        for k, v in split_rows.items()
+        split: chunk_indexed[labels == split]
+        for split in ("train", "val", "test")
       }
 
       if not val_pool_dir:

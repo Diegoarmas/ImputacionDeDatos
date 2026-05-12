@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from data_cleaning import TARGET_COLUMN, load_csv_resilient, prepare_dataframe
 from modeling import build_pipeline, fit_and_evaluate
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,8 +32,8 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument(
     "--val-dir",
-    default="data/processed/pool_val",
-    help="Directorio de validacion (opcional).",
+    default="",
+    help="Directorio de validacion. Si se omite, se salta la evaluacion en validacion.",
   )
   parser.add_argument(
     "--val-pattern",
@@ -41,8 +42,8 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument(
     "--test-dir",
-    default="data/processed/pool_test",
-    help="Directorio de test (opcional).",
+    default="",
+    help="Directorio de test. Si se omite, se salta la evaluacion en test.",
   )
   parser.add_argument(
     "--test-pattern",
@@ -105,8 +106,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
     "--device",
     choices=["cuda", "cpu"],
-    default="cuda",
-    help="Dispositivo para entrenamiento.",
+    default="cpu",
+    help="Dispositivo para entrenamiento (default: cpu; usa cuda para GPU).",
   )
   parser.add_argument(
     "--simplificado",
@@ -122,19 +123,21 @@ def parse_args() -> argparse.Namespace:
 
 
 def _load_input_data(
-  input_path: Path,
+  input_path: Path | None,
   input_dir: Path,
   input_pattern: str,
   sep: str,
   encoding: str,
 ) -> tuple[pd.DataFrame, list[Path]]:
-  if input_path.exists():
+  if input_path is not None and input_path.exists():
     df = load_csv_resilient(input_path, sep=sep, encoding=encoding)
     return df, [input_path]
 
   if not input_dir.exists() or not input_dir.is_dir():
     raise FileNotFoundError(
-      f"No existe el archivo {input_path} ni el directorio {input_dir}"
+      f"No existe el directorio {input_dir}"
+      if input_path is None
+      else f"No existe el archivo {input_path} ni el directorio {input_dir}"
     )
 
   input_files = sorted(path for path in input_dir.glob(input_pattern) if path.is_file())
@@ -218,8 +221,6 @@ def _evaluate_on_dataset(
   eval_df: pd.DataFrame,
   dataset_name: str,
 ) -> dict:
-  from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-
   pipeline = model_artifact["pipeline"]
   feature_columns = model_artifact["feature_columns"]
 
@@ -419,6 +420,51 @@ def _update_json(path: Path, updates: dict) -> None:
     json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
+def _evaluate_split_dataset(
+  split_dir: Path | None,
+  split_pattern: str,
+  split_name: str,
+  model_artifact: dict,
+  args: argparse.Namespace,
+  metrics_output_path: Path,
+  period_report: dict,
+) -> None:
+  if split_dir is None or not split_dir.exists() or not split_dir.is_dir():
+    return
+
+  try:
+    df, inputs = _load_input_data(
+      input_path=None,
+      input_dir=split_dir,
+      input_pattern=split_pattern,
+      sep=args.sep,
+      encoding=args.encoding,
+    )
+  except FileNotFoundError as exc:
+    print(f"Advertencia: no se pudo cargar {split_name}: {exc}")
+    return
+
+  metrics = _evaluate_on_dataset(model_artifact, df, split_name)
+  if metrics:
+    print(f"\n=== Evaluacion en {split_name.upper()} ===")
+    print(
+      f"MAE={metrics[f'{split_name}_mae']:.4f} "
+      f"RMSE={metrics[f'{split_name}_rmse']:.4f} "
+      f"R2={metrics[f'{split_name}_r2']:.4f}"
+    )
+    _update_json(
+      metrics_output_path,
+      {
+        **metrics,
+        f"{split_name}_dir": str(split_dir),
+        f"{split_name}_pattern": split_pattern,
+        f"{split_name}_inputs_loaded": [str(p) for p in inputs],
+      },
+    )
+
+  period_report[split_name] = _period_stats(df, args.period_column, TARGET_COLUMN)
+
+
 def main() -> int:
   args = parse_args()
 
@@ -430,7 +476,7 @@ def main() -> int:
     period_report_output_path,
   ) = _build_output_paths(args)
 
-  input_path = Path(args.input) if args.input else Path("__missing_input__")
+  input_path = Path(args.input) if args.input else None
   train_dir = Path(args.input_dir)
 
   try:
@@ -464,59 +510,11 @@ def main() -> int:
 
   model_artifact = joblib.load(model_output_path)
 
-  val_dir = Path(args.val_dir)
-  if args.val_dir and val_dir.exists() and val_dir.is_dir():
-    try:
-      val_df, val_inputs = _load_input_data(
-        input_path=Path("__missing_input__"),
-        input_dir=val_dir,
-        input_pattern=args.val_pattern,
-        sep=args.sep,
-        encoding=args.encoding,
-      )
-      val_metrics = _evaluate_on_dataset(model_artifact, val_df, "val")
-      if val_metrics:
-        print("\n=== Evaluacion en VALIDACION ===")
-        print(f"MAE={val_metrics['val_mae']:.4f} RMSE={val_metrics['val_rmse']:.4f} R2={val_metrics['val_r2']:.4f}")
-        _update_json(
-          metrics_output_path,
-          {
-            **val_metrics,
-            "val_dir": str(val_dir),
-            "val_pattern": args.val_pattern,
-            "val_inputs_loaded": [str(p) for p in val_inputs],
-          },
-        )
-      period_report["val"] = _period_stats(val_df, args.period_column, TARGET_COLUMN)
-    except FileNotFoundError as exc:
-      print(f"Advertencia: no se pudo cargar validacion: {exc}")
+  val_dir = Path(args.val_dir) if args.val_dir else None
+  _evaluate_split_dataset(val_dir, args.val_pattern, "val", model_artifact, args, metrics_output_path, period_report)
 
-  test_dir = Path(args.test_dir)
-  if args.test_dir and test_dir.exists() and test_dir.is_dir():
-    try:
-      test_df, test_inputs = _load_input_data(
-        input_path=Path("__missing_input__"),
-        input_dir=test_dir,
-        input_pattern=args.test_pattern,
-        sep=args.sep,
-        encoding=args.encoding,
-      )
-      test_metrics = _evaluate_on_dataset(model_artifact, test_df, "test")
-      if test_metrics:
-        print("\n=== Evaluacion en TEST ===")
-        print(f"MAE={test_metrics['test_mae']:.4f} RMSE={test_metrics['test_rmse']:.4f} R2={test_metrics['test_r2']:.4f}")
-        _update_json(
-          metrics_output_path,
-          {
-            **test_metrics,
-            "test_dir": str(test_dir),
-            "test_pattern": args.test_pattern,
-            "test_inputs_loaded": [str(p) for p in test_inputs],
-          },
-        )
-      period_report["test"] = _period_stats(test_df, args.period_column, TARGET_COLUMN)
-    except FileNotFoundError as exc:
-      print(f"Advertencia: no se pudo cargar test: {exc}")
+  test_dir = Path(args.test_dir) if args.test_dir else None
+  _evaluate_split_dataset(test_dir, args.test_pattern, "test", model_artifact, args, metrics_output_path, period_report)
 
   with open(period_report_output_path, "w", encoding="utf-8") as f:
     json.dump(period_report, f, ensure_ascii=False, indent=2)

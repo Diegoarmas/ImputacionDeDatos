@@ -86,8 +86,8 @@ def build_pipeline(
     steps=[
       ("preprocessor", preprocessor),
       ("model", model),
-    ]
-  , memory=None)
+    ],
+  )
 
   return pipeline, numeric_columns, categorical_columns, model_backend
 

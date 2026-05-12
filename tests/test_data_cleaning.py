@@ -1,13 +1,9 @@
-import sys
-from pathlib import Path
 import io
 import csv
 
 import numpy as np
 import pandas as pd
 import pytest
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from data_cleaning import (
     TARGET_COLUMN,
@@ -30,16 +26,16 @@ class TestNormalizeNumberString:
         assert _normalize_number_string("1234") == "1234"
 
     def test_comma_decimal_european(self):
-        # "153,000" matches THOUSANDS_COMMA_RE (1-3 digits + ,3digits) → thousands sep
-        assert _normalize_number_string("153,000") == "153000"
+        # coma = separador decimal en este dataset: "153,000" → 153.000
+        assert _normalize_number_string("153,000") == "153.000"
 
     def test_dot_thousands_european(self):
         # "1.234" matches THOUSANDS_DOT_RE → strip dot
         assert _normalize_number_string("1.234") == "1234"
 
-    def test_comma_thousands_anglosaxon(self):
-        # "1,234" matches THOUSANDS_COMMA_RE → strip comma
-        assert _normalize_number_string("1,234") == "1234"
+    def test_comma_decimal(self):
+        # coma = separador decimal: "1,234" → 1.234
+        assert _normalize_number_string("1,234") == "1.234"
 
     def test_mixed_european_format(self):
         # "1.234,56" → last sep is comma → European decimal
@@ -63,12 +59,12 @@ class TestToFloatSeries:
         result = to_float_series(s)
         assert list(result) == [1.0, 2.0, 3.0]
 
-    def test_european_decimals(self):
-        # "153,000" → THOUSANDS_COMMA_RE matches → thousands sep → 153000
+    def test_comma_as_decimal(self):
+        # coma = separador decimal: "153,000" → 153.0
         s = pd.Series(["153,000", "122,000"])
         result = to_float_series(s)
-        assert result.iloc[0] == 153000.0
-        assert result.iloc[1] == 122000.0
+        assert result.iloc[0] == pytest.approx(153.0)
+        assert result.iloc[1] == pytest.approx(122.0)
 
     def test_nan_handling(self):
         s = pd.Series(["", "nan", "None", "1.5"])
@@ -78,10 +74,11 @@ class TestToFloatSeries:
         assert np.isnan(result.iloc[2])
         assert result.iloc[3] == 1.5
 
-    def test_thousands_comma(self):
+    def test_comma_decimal_single(self):
+        # coma = separador decimal: "1,234" → 1.234
         s = pd.Series(["1,234"])
         result = to_float_series(s)
-        assert result.iloc[0] == 1234.0
+        assert result.iloc[0] == pytest.approx(1.234)
 
     def test_coerce_invalid(self):
         s = pd.Series(["abc", "1.5"])
