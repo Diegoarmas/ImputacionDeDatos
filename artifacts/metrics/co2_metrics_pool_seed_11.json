@@ -1,0 +1,27 @@
+{
+  "rows_total": 50000,
+  "rows_with_known_target": 24356,
+  "rows_with_missing_applied": 30515,
+  "missing_rate": 0.2,
+  "mae": 9.66297409062965,
+  "rmse": 21.688885090703668,
+  "r2": 0.8291064125517751,
+  "mae_std": 0.10777015058551499,
+  "rmse_std": 0.9113176776880301,
+  "r2_std": 0.012178773930293693,
+  "cv_folds": 5,
+  "input": "data/processed/pool/muestra_50k_0041.csv",
+  "input_argument": "data/processed/muestra_50k_con_co2.csv",
+  "pool_dir": "data/processed/pool",
+  "pool_pattern": "*.csv",
+  "output": "data/processed/muestra_50k_co2_imputado_seed_11.csv",
+  "simplified_output": "",
+  "rows_in_simplified_output": 0,
+  "model_output": "artifacts/models/co2_model.joblib",
+  "model_hyperparameters": {
+    "max_iter": 350,
+    "learning_rate": 0.05,
+    "max_depth": 8,
+    "min_samples_leaf": 20
+  }
+}

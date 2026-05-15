@@ -26,13 +26,12 @@ KNOWN_NUMERIC_COLUMNS = [
   "PLAZAS_PIE",
 ]
 
-THOUSANDS_COMMA_RE = re.compile(r"^[+-]?\d{1,3}(,\d{3})+$")
 THOUSANDS_DOT_RE = re.compile(r"^[+-]?\d{1,3}(\.\d{3})+$")
 
 
 def _normalize_number_string(value: object) -> str:
   # Normaliza numeros con separadores europeos/anglosajones sin alterar decimales.
-  if pd.isna(value):
+  if pd.isna(value): # type: ignore
     return ""
 
   text = str(value).strip().replace("\u00a0", "").replace(" ", "")
@@ -50,8 +49,8 @@ def _normalize_number_string(value: object) -> str:
     return text.replace(",", "")
 
   if has_comma:
-    if THOUSANDS_COMMA_RE.match(text):
-      return text.replace(",", "")
+    # En este dataset la coma se usa como separador decimal.
+    # Ejemplo: "134,000" debe interpretarse como 134 (no como 134000).
     return text.replace(",", ".")
 
   if has_dot and THOUSANDS_DOT_RE.match(text):

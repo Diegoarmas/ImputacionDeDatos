@@ -6,11 +6,17 @@ from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
+try:
+  from xgboost import XGBRegressor
+except ImportError:
+  XGBRegressor = None
+
 
 def build_pipeline(
   feature_df: pd.DataFrame,
   random_state: int,
-) -> tuple[Pipeline, list[str], list[str]]:
+  device: str,
+) -> tuple[Pipeline, list[str], list[str], str]:
   # Detecta dinamicamente tipos para aplicar preprocesado distinto por bloque.
   numeric_columns = [
     c for c in feature_df.columns if pd.api.types.is_numeric_dtype(feature_df[c])
@@ -43,22 +49,47 @@ def build_pipeline(
     ]
   )
 
-  model = HistGradientBoostingRegressor(
-    random_state=random_state,
-    max_iter=350,
-    learning_rate=0.05,
-    max_depth=8,
-    min_samples_leaf=20,
-  )
+  if device == "cuda":
+    if XGBRegressor is None:
+      raise ImportError(
+        "Falta dependencia xgboost. Instala requirements.txt y vuelve a ejecutar."
+      )
+
+    model = XGBRegressor(
+      objective="reg:squarederror",
+      tree_method="hist",
+      device="cuda",
+      n_estimators=600,
+      learning_rate=0.05,
+      max_depth=8,
+      min_child_weight=3,
+      subsample=0.9,
+      colsample_bytree=0.9,
+      reg_lambda=1.0,
+      random_state=random_state,
+      n_jobs=1,
+    )
+    model_backend = "xgboost-cuda"
+  elif device == "cpu":
+    model = HistGradientBoostingRegressor(
+      random_state=random_state,
+      max_iter=350,
+      learning_rate=0.05,
+      max_depth=8,
+      min_samples_leaf=20,
+    )
+    model_backend = "sklearn-hgbt-cpu"
+  else:
+    raise ValueError("device debe ser 'cuda' o 'cpu'.")
 
   pipeline = Pipeline(
     steps=[
       ("preprocessor", preprocessor),
       ("model", model),
-    ]
+    ],
   )
 
-  return pipeline, numeric_columns, categorical_columns
+  return pipeline, numeric_columns, categorical_columns, model_backend
 
 
 def fit_and_evaluate(
@@ -67,6 +98,7 @@ def fit_and_evaluate(
   y_known: pd.Series,
   random_state: int,
   cv_folds: int,
+  n_jobs_cv: int,
 ) -> dict[str, float]:
   # Usa validacion cruzada para reducir la varianza de una sola particion.
   cv = KFold(
@@ -85,7 +117,7 @@ def fit_and_evaluate(
       "rmse": "neg_root_mean_squared_error",
       "r2": "r2",
     },
-    n_jobs=-1,
+    n_jobs=n_jobs_cv,
     return_train_score=False,
   )
 

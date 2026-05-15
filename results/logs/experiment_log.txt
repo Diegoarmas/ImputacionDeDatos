@@ -1,0 +1,5 @@
+=== Experiment Log ===
+Timestamp: 2026-04-15 12:57:09
+Imputers evaluados: sklearn-hgbt-cpu
+Missing rates utilizados: 0.10
+Numero total de experimentos: 1
