@@ -1,4 +1,5 @@
 import argparse
+import gc
 import json
 from collections import Counter
 from pathlib import Path
@@ -32,7 +33,7 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument(
     "--val-dir",
-    default="",
+    default="data/processed/pool_val",
     help="Directorio de validacion. Si se omite, se salta la evaluacion en validacion.",
   )
   parser.add_argument(
@@ -62,7 +63,7 @@ def parse_args() -> argparse.Namespace:
   )
   parser.add_argument(
     "--output",
-    default="data/processed/muestra_50k_co2_imputado.csv",
+    default="data/processed/22_05.csv",
     help="CSV de salida con imputaciones sobre train.",
   )
   parser.add_argument(
@@ -110,13 +111,19 @@ def parse_args() -> argparse.Namespace:
     help="Dispositivo para entrenamiento (default: cpu; usa cuda para GPU).",
   )
   parser.add_argument(
+    "--max-train-files",
+    type=int,
+    default=20,
+    help="Maximo de archivos CSV a cargar de train (0 = sin limite).",
+  )
+  parser.add_argument(
     "--simplificado",
     action="store_true",
     help="Genera CSV simplificado con filas imputadas.",
   )
   parser.add_argument(
     "--simplificado-output",
-    default="",
+    default="data/processed/simplificado/datos_simpl.csv",
     help="Ruta de CSV simplificado.",
   )
   return parser.parse_args()
@@ -128,6 +135,7 @@ def _load_input_data(
   input_pattern: str,
   sep: str,
   encoding: str,
+  max_files: int | None = None,
 ) -> tuple[pd.DataFrame, list[Path]]:
   if input_path is not None and input_path.exists():
     df = load_csv_resilient(input_path, sep=sep, encoding=encoding)
@@ -146,8 +154,19 @@ def _load_input_data(
       f"No se encontraron ficheros con patron {input_pattern} en {input_dir}"
     )
 
-  dataframes = [load_csv_resilient(path, sep=sep, encoding=encoding) for path in input_files]
-  combined_df = pd.concat(dataframes, ignore_index=True)
+  if max_files is not None and max_files > 0:
+    input_files = input_files[:max_files]
+
+  combined_df = None
+  for path in input_files:
+    chunk = load_csv_resilient(path, sep=sep, encoding=encoding)
+    if combined_df is None:
+      combined_df = chunk
+    else:
+      combined_df = pd.concat([combined_df, chunk], ignore_index=True)
+    del chunk
+    gc.collect()
+
   return combined_df, input_files
 
 
@@ -156,7 +175,7 @@ def _build_output_paths(args: argparse.Namespace) -> tuple[Path, Path, Path, Pat
   simplified_output_path = (
     Path(args.simplificado_output)
     if args.simplificado_output
-    else Path("data/processed/datos_simpl.csv")
+    else Path("data/processed/simplificado/datos_simpl.csv")
   )
   model_output_path = Path(args.model_output)
   metrics_output_path = Path(args.metrics_output)
@@ -330,11 +349,20 @@ def _train_and_generate_outputs(
   print(f"  R2:   {scores['r2']:.4f} +/- {scores['r2_std']:.4f}")
 
   pipeline.fit(x_known, y_known)
+  del x_known, y_known
+  gc.collect()
+
+  feature_columns = list(features.columns)
 
   imputed_values = co2_with_missing.copy()
   if missing_mask.sum() > 0:
     x_missing = features.loc[missing_mask]
     imputed_values.loc[missing_mask] = pipeline.predict(x_missing)
+    del x_missing
+    gc.collect()
+
+  del features
+  gc.collect()
 
   output_df = train_df.copy()
   output_df["EMISIONES_CO2_COMPLETA"] = co2_complete
@@ -362,7 +390,7 @@ def _train_and_generate_outputs(
 
   model_artifact = {
     "pipeline": pipeline,
-    "feature_columns": list(features.columns),
+    "feature_columns": feature_columns,
     "numeric_columns": numeric_columns,
     "categorical_columns": categorical_columns,
     "target_column": TARGET_COLUMN,
@@ -479,6 +507,7 @@ def main() -> int:
   input_path = Path(args.input) if args.input else None
   train_dir = Path(args.input_dir)
 
+  max_train_files = args.max_train_files if args.max_train_files > 0 else None
   try:
     train_df, train_inputs = _load_input_data(
       input_path=input_path,
@@ -486,6 +515,7 @@ def main() -> int:
       input_pattern=args.input_pattern,
       sep=args.sep,
       encoding=args.encoding,
+      max_files=max_train_files,
     )
   except FileNotFoundError as exc:
     print(f"Error: {exc}")
