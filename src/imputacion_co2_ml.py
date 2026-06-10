@@ -247,7 +247,7 @@ def _evaluate_on_dataset(
     return {}
 
   features, target = prepare_dataframe(eval_df)
-  valid_mask = target.notna()
+  valid_mask = target.notna() & (target > 0)
   if valid_mask.sum() < 10:
     print(
       f"Advertencia: muy pocas filas con {TARGET_COLUMN} en {dataset_name} ({valid_mask.sum()})"
@@ -256,7 +256,7 @@ def _evaluate_on_dataset(
 
   x_eval = features.loc[valid_mask].reindex(columns=feature_columns)
   y_eval = target.loc[valid_mask]
-  y_pred = pipeline.predict(x_eval)
+  y_pred = np.maximum(pipeline.predict(x_eval), 0.0)
 
   mae = float(mean_absolute_error(y_eval, y_pred))
   rmse = float(np.sqrt(mean_squared_error(y_eval, y_pred)))
@@ -291,7 +291,10 @@ def _train_and_generate_outputs(
     return 1
 
   features, target = prepare_dataframe(train_df)
-  full_target_mask = target.notna()
+  zero_co2_count = int((target == 0).sum())
+  if zero_co2_count > 0:
+    print(f"Excluidas {zero_co2_count} filas con EMISIONES_CO2 = 0 (vehículos eléctricos u otras emisiones nulas).")
+  full_target_mask = target.notna() & (target > 0)
   if full_target_mask.sum() < 100:
     print("Error: hay muy pocas filas con EMISIONES_CO2 para entrenar.")
     return 1
@@ -357,7 +360,7 @@ def _train_and_generate_outputs(
   imputed_values = co2_with_missing.copy()
   if missing_mask.sum() > 0:
     x_missing = features.loc[missing_mask]
-    imputed_values.loc[missing_mask] = pipeline.predict(x_missing)
+    imputed_values.loc[missing_mask] = np.maximum(pipeline.predict(x_missing), 0.0)
     del x_missing
     gc.collect()
 
