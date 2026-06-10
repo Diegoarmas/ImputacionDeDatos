@@ -181,7 +181,8 @@ def _has_value(series: pd.Series) -> pd.Series:
     numeric_series = pd.to_numeric(series, errors="coerce")
     is_nonzero = numeric_series != 0
     return has_value & is_nonzero
-  except Exception:
+  except Exception as exc:
+    print(f"Aviso: no se pudo convertir la serie a numerico para filtrar ceros ({exc}). Se omite el filtro de ceros.")
     return has_value
 
 
@@ -265,7 +266,6 @@ def _write_single_chunk(
     sep=out_sep,
     encoding=out_encoding,
   )
-
 
 
 def _update_period_stats_for_split(
