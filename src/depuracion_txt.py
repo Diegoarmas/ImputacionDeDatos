@@ -55,17 +55,17 @@ def build_parser() -> argparse.ArgumentParser:
   )
   parser.add_argument(
     "--input",
-    default="data/raw/muestra_50k.txt",
+    default="data/raw/parque_vehiculos_202512.txt",
     help="Ruta del archivo de entrada.",
   )
   parser.add_argument(
     "--output",
-    default="data/processed/muestra_50k_con_co2.csv",
+    default="",
     help="Ruta del archivo de salida (modo archivo unico).",
   )
   parser.add_argument(
     "--pool-dir",
-    default="",
+    default="data/processed/pool_train",
     help=(
       "Directorio para exportar multiples muestras CSV de entrenamiento. "
       "Si se define, se generan archivos por bloques y se ignora --output."
@@ -73,12 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
   )
   parser.add_argument(
     "--pool-val-dir",
-    default="",
+    default="data/processed/pool_val",
     help="Directorio para exportar pool de validacion.",
   )
   parser.add_argument(
     "--pool-test-dir",
-    default="",
+    default="data/processed/pool_test",
     help="Directorio para exportar pool de test.",
   )
   parser.add_argument(
@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
   parser.add_argument(
     "--rows-per-sample",
     type=int,
-    default=100_000,
+    default=200_000,
     help="Numero de filas por muestra CSV cuando se usa modo pool.",
   )
   parser.add_argument(
@@ -107,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
   )
   parser.add_argument(
     "--pool-prefix",
-    default="muestra_100k_",
+    default="muestra_200k_",
     help="Prefijo de nombre de archivo para muestras en pools.",
   )
   parser.add_argument(
@@ -148,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
   parser.add_argument(
     "--chunksize",
     type=int,
-    default=100_000,
+    default=200_000,
     help="Numero de filas por bloque de lectura.",
   )
   parser.add_argument(
@@ -181,7 +181,8 @@ def _has_value(series: pd.Series) -> pd.Series:
     numeric_series = pd.to_numeric(series, errors="coerce")
     is_nonzero = numeric_series != 0
     return has_value & is_nonzero
-  except Exception:
+  except Exception as exc:
+    print(f"Aviso: no se pudo convertir la serie a numerico para filtrar ceros ({exc}). Se omite el filtro de ceros.")
     return has_value
 
 
@@ -265,7 +266,6 @@ def _write_single_chunk(
     sep=out_sep,
     encoding=out_encoding,
   )
-
 
 
 def _update_period_stats_for_split(

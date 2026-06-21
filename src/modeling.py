@@ -7,9 +7,19 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
 try:
+  import xgboost as _xgb
   from xgboost import XGBRegressor
+
+  class _CUDAXGBRegressor(XGBRegressor):
+    """Uses Booster.predict(DMatrix) to avoid the inplace_predict device-mismatch warning."""
+
+    def predict(self, X):
+      dm = _xgb.DMatrix(X)
+      return self.get_booster().predict(dm)
+
 except ImportError:
   XGBRegressor = None
+  _CUDAXGBRegressor = None
 
 
 def build_pipeline(
@@ -55,17 +65,18 @@ def build_pipeline(
         "Falta dependencia xgboost. Instala requirements.txt y vuelve a ejecutar."
       )
 
-    model = XGBRegressor(
+    model = _CUDAXGBRegressor(
       objective="reg:squarederror",
       tree_method="hist",
       device="cuda",
-      n_estimators=600,
+      n_estimators=400,
       learning_rate=0.05,
-      max_depth=8,
-      min_child_weight=3,
-      subsample=0.9,
-      colsample_bytree=0.9,
+      max_depth=6,
+      min_child_weight=5,
+      subsample=0.8,
+      colsample_bytree=0.8,
       reg_lambda=1.0,
+      max_bin=256,
       random_state=random_state,
       n_jobs=1,
     )

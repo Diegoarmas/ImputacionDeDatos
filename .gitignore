@@ -2,7 +2,7 @@
 /dist
 /coverage
 /.env
-/data/raw/parque_vehiculos_202503.txt
+/data/raw/*
 /data/processed/pool*
 /.venv
 
