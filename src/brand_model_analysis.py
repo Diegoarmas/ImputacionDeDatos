@@ -218,13 +218,18 @@ def _run_ablation(
     test_features: pd.DataFrame,
     test_target: pd.Series,
     valid_mask: pd.Series,
-    original_metrics: dict,
+    device: str,
     args: argparse.Namespace,
 ) -> pd.DataFrame:
-    """Re-entrena el modelo sin MARCA/MODELO y compara con el original."""
+    """Re-entrena CON y SIN MARCA/MODELO usando el mismo pool/algoritmo y compara.
+
+    Ambas configuraciones se entrenan desde cero sobre el mismo train_dir y con el
+    mismo backend (device) que el modelo de producción, para que la única variable
+    que cambie entre filas de la tabla sea la presencia de MARCA/MODELO.
+    """
     from modeling import build_pipeline, fit_and_evaluate
 
-    print("\n=== Experimento de ablación: re-entrenando SIN MARCA/MODELO ===")
+    print(f"\n=== Experimento de ablación: re-entrenando CON y SIN MARCA/MODELO (device={device}) ===")
 
     # --- Cargar datos de train ---
     train_df = _load_pool(
@@ -239,76 +244,66 @@ def _run_ablation(
     gc.collect()
 
     train_valid = train_target.notna() & (train_target > 0)
-    x_train = train_features.loc[train_valid]
+    x_train_full = train_features.loc[train_valid]
     y_train = train_target.loc[train_valid]
-
-    # --- Eliminar columnas de marca/modelo ---
-    drop_cols_present = [c for c in ABLATION_DROP_COLS if c in x_train.columns]
-    x_train_ablated = x_train.drop(columns=drop_cols_present)
-    x_test_ablated = test_features.loc[valid_mask].drop(columns=drop_cols_present)
-
-    print(f"  Features eliminadas: {drop_cols_present}")
-    print(f"  Features restantes: {len(x_train_ablated.columns)}")
-
-    # --- Construir y entrenar pipeline sin MARCA/MODELO ---
-    pipeline_abl, _, _, backend = build_pipeline(
-        x_train_ablated,
-        random_state=args.random_state,
-        device="cpu",
-    )
-
-    scores_abl = fit_and_evaluate(
-        pipeline_abl,
-        x_train_ablated,
-        y_train,
-        random_state=args.random_state,
-        cv_folds=args.cv_folds,
-        n_jobs_cv=-1,
-    )
-    print(f"  CV sin MARCA/MODELO: MAE={scores_abl['mae']:.4f}  RMSE={scores_abl['rmse']:.4f}  R²={scores_abl['r2']:.4f}")
-
-    # --- Evaluar en test ---
-    pipeline_abl.fit(x_train_ablated, y_train)
+    x_test_full = test_features.loc[valid_mask]
     y_test = test_target.loc[valid_mask]
-    y_pred_abl = np.maximum(pipeline_abl.predict(x_test_ablated), 0.0)
 
-    test_mae_abl = float(mean_absolute_error(y_test, y_pred_abl))
-    test_rmse_abl = float(np.sqrt(mean_squared_error(y_test, y_pred_abl)))
-    test_r2_abl = float(r2_score(y_test, y_pred_abl))
+    drop_cols_present = [c for c in ABLATION_DROP_COLS if c in x_train_full.columns]
+    print(f"  Features eliminadas en la config 'sin': {drop_cols_present}")
 
-    print(f"  Test sin MARCA/MODELO: MAE={test_mae_abl:.4f}  RMSE={test_rmse_abl:.4f}  R²={test_r2_abl:.4f}")
-
-    # --- Tabla comparativa ---
-    rows = [
-        {
-            "config": "Con MARCA/MODELO (original)",
-            "cv_mae": original_metrics["cv_mae"],
-            "cv_rmse": original_metrics["cv_rmse"],
-            "cv_r2": original_metrics["cv_r2"],
-            "test_mae": original_metrics["test_mae"],
-            "test_rmse": original_metrics["test_rmse"],
-            "test_r2": original_metrics["test_r2"],
-        },
-        {
-            "config": "Sin MARCA/MODELO (ablación)",
-            "cv_mae": scores_abl["mae"],
-            "cv_rmse": scores_abl["rmse"],
-            "cv_r2": scores_abl["r2"],
-            "test_mae": test_mae_abl,
-            "test_rmse": test_rmse_abl,
-            "test_r2": test_r2_abl,
-        },
+    configs = [
+        ("Con MARCA/MODELO (original)", x_train_full, x_test_full),
+        ("Sin MARCA/MODELO (ablación)", x_train_full.drop(columns=drop_cols_present),
+         x_test_full.drop(columns=drop_cols_present)),
     ]
 
-    delta_mae = test_mae_abl - original_metrics["test_mae"]
-    delta_r2 = original_metrics["test_r2"] - test_r2_abl
+    rows = []
+    metrics_by_config = {}
+    for label, x_tr, x_te in configs:
+        pipeline, _, _, _ = build_pipeline(x_tr, random_state=args.random_state, device=device)
+
+        scores = fit_and_evaluate(
+            pipeline,
+            x_tr,
+            y_train,
+            random_state=args.random_state,
+            cv_folds=args.cv_folds,
+            n_jobs_cv=-1,
+        )
+        print(f"  CV [{label}]: MAE={scores['mae']:.4f}  RMSE={scores['rmse']:.4f}  R²={scores['r2']:.4f}")
+
+        pipeline.fit(x_tr, y_train)
+        y_pred = np.maximum(pipeline.predict(x_te), 0.0)
+        test_mae = float(mean_absolute_error(y_test, y_pred))
+        test_rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+        test_r2 = float(r2_score(y_test, y_pred))
+        print(f"  Test [{label}]: MAE={test_mae:.4f}  RMSE={test_rmse:.4f}  R²={test_r2:.4f}")
+
+        metrics = {
+            "config": label,
+            "cv_mae": scores["mae"],
+            "cv_rmse": scores["rmse"],
+            "cv_r2": scores["r2"],
+            "test_mae": test_mae,
+            "test_rmse": test_rmse,
+            "test_r2": test_r2,
+        }
+        rows.append(metrics)
+        metrics_by_config[label] = metrics
+
+    con = metrics_by_config["Con MARCA/MODELO (original)"]
+    sin = metrics_by_config["Sin MARCA/MODELO (ablación)"]
+
+    delta_mae = sin["test_mae"] - con["test_mae"]
+    delta_r2 = con["test_r2"] - sin["test_r2"]
     rows.append({
         "config": "Δ (sin − con)",
-        "cv_mae": scores_abl["mae"] - original_metrics["cv_mae"],
-        "cv_rmse": scores_abl["rmse"] - original_metrics["cv_rmse"],
-        "cv_r2": original_metrics["cv_r2"] - scores_abl["r2"],
+        "cv_mae": sin["cv_mae"] - con["cv_mae"],
+        "cv_rmse": sin["cv_rmse"] - con["cv_rmse"],
+        "cv_r2": con["cv_r2"] - sin["cv_r2"],
         "test_mae": delta_mae,
-        "test_rmse": test_rmse_abl - original_metrics["test_rmse"],
+        "test_rmse": sin["test_rmse"] - con["test_rmse"],
         "test_r2": delta_r2,
     })
 
@@ -505,33 +500,12 @@ def main() -> int:
             print(f"Error: directorio de train '{train_dir}' no encontrado (necesario para --ablation).")
             return 1
 
-        original_metrics = {
-            "cv_mae": global_mae,    # Usamos test como proxy si no tenemos CV del original.
-            "cv_rmse": global_rmse,
-            "cv_r2": global_r2,
-            "test_mae": global_mae,
-            "test_rmse": global_rmse,
-            "test_r2": global_r2,
-        }
-
-        # Intentar leer métricas CV originales del JSON si existe.
-        metrics_json = Path("artifacts/metrics/co2_metrics.json")
-        if metrics_json.exists():
-            with open(metrics_json, "r", encoding="utf-8") as f:
-                saved = json.load(f)
-            if "mae" in saved:
-                original_metrics["cv_mae"] = saved["mae"]
-            if "rmse" in saved:
-                original_metrics["cv_rmse"] = saved["rmse"]
-            if "r2" in saved:
-                original_metrics["cv_r2"] = saved["r2"]
-
         ablation_df = _run_ablation(
             train_dir=train_dir,
             test_features=features,
             test_target=target,
             valid_mask=valid_mask,
-            original_metrics=original_metrics,
+            device=model_artifact.get("device", "cpu"),
             args=args,
         )
 
