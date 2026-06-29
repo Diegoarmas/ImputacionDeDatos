@@ -1,5 +1,5 @@
 === Experiment Log ===
-Timestamp: 2026-03-24 17:23:58
-Imputers evaluados: iterative, knn, mean
-Missing rates utilizados: 0.05, 0.10
-Numero total de experimentos: 6
+Timestamp: 2026-04-15 12:57:09
+Imputers evaluados: sklearn-hgbt-cpu
+Missing rates utilizados: 0.10
+Numero total de experimentos: 1
