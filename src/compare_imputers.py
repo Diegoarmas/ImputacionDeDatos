@@ -20,6 +20,7 @@ import json
 import sys
 from pathlib import Path
 
+import mlflow
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -341,28 +342,51 @@ def main() -> int:
   all_techniques = _build_techniques(features, args.random_state, args.knn_neighbors)
   selected = {k: v for k, v in all_techniques.items() if k in args.techniques}
 
-  results = []
-  for name, pipeline in selected.items():
-    r = _evaluate_technique(name, pipeline, x_train, y_train, args.cv_folds, args.random_state)
-    results.append(r)
-    gc.collect()
+  with mlflow.start_run():
+    mlflow.log_params(
+      {
+        "missing_rate": missing_rate,
+        "knn_neighbors": args.knn_neighbors,
+        "cv_folds": args.cv_folds,
+        "random_state": args.random_state,
+        "techniques": ",".join(args.techniques),
+        "input_dir": args.input_dir,
+      }
+    )
 
-  _print_table(results)
+    results = []
+    for name, pipeline in selected.items():
+      r = _evaluate_technique(name, pipeline, x_train, y_train, args.cv_folds, args.random_state)
+      results.append(r)
+      mlflow.log_metrics(
+        {
+          f"{name}_mae": r["mae"],
+          f"{name}_rmse": r["rmse"],
+          f"{name}_r2": r["r2"],
+        }
+      )
+      gc.collect()
 
-  meta = {
-    "input_dir": args.input_dir,
-    "cv_folds": args.cv_folds,
-    "random_state": args.random_state,
-    "missing_rate": missing_rate,
-    "knn_neighbors": args.knn_neighbors,
-    "rows_with_target": int(valid_mask.sum()),
-    "rows_used_for_cv": int(train_mask.sum()),
-  }
+    _print_table(results)
 
-  print("\nGuardando resultados...")
-  _save_json(results, Path(args.json_output), meta)
-  _save_csv(results, Path(args.csv_output))
-  _save_plot(results, Path(args.plot_output))
+    meta = {
+      "input_dir": args.input_dir,
+      "cv_folds": args.cv_folds,
+      "random_state": args.random_state,
+      "missing_rate": missing_rate,
+      "knn_neighbors": args.knn_neighbors,
+      "rows_with_target": int(valid_mask.sum()),
+      "rows_used_for_cv": int(train_mask.sum()),
+    }
+
+    print("\nGuardando resultados...")
+    _save_json(results, Path(args.json_output), meta)
+    _save_csv(results, Path(args.csv_output))
+    _save_plot(results, Path(args.plot_output))
+
+    mlflow.log_artifact(args.json_output)
+    mlflow.log_artifact(args.csv_output)
+    mlflow.log_artifact(args.plot_output)
 
   return 0
 

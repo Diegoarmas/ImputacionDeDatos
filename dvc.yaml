@@ -1,0 +1,91 @@
+stages:
+  prepare_pools:
+    cmd: ./generate_pools.sh
+    deps:
+      - data/raw/parque_vehiculos_202503.txt
+      - src/depuracion_txt.py
+      - generate_pools.sh
+    outs:
+      - data/processed/pool_train
+      - data/processed/pool_val
+      - data/processed/pool_test
+    metrics:
+      - artifacts/metrics/split_period_report.json:
+          cache: false
+
+  train_model:
+    cmd: >-
+      python src/imputacion_co2_ml.py
+      --input-dir data/processed/pool_train
+      --val-dir data/processed/pool_val
+      --test-dir data/processed/pool_test
+      --missing-rate ${train.missing_rate}
+      --cv-folds ${train.cv_folds}
+      --random-state ${train.random_state}
+      --device ${train.device}
+      --max-train-files ${train.max_train_files}
+    deps:
+      - data/processed/pool_train
+      - data/processed/pool_val
+      - data/processed/pool_test
+      - src/imputacion_co2_ml.py
+      - src/data_cleaning.py
+      - src/modeling.py
+    params:
+      - train
+    outs:
+      - artifacts/models/co2_model.joblib
+      - data/processed/22_05.csv
+    metrics:
+      - artifacts/metrics/co2_metrics.json:
+          cache: false
+
+  compare_imputers:
+    cmd: >-
+      python src/compare_imputers.py
+      --input-dir data/processed/pool_train
+      --knn-neighbors ${compare.knn_neighbors}
+      --missing-rate ${compare.missing_rate}
+      --cv-folds ${compare.cv_folds}
+      --max-files ${compare.max_files}
+    deps:
+      - data/processed/pool_train
+      - src/compare_imputers.py
+    params:
+      - compare
+    outs:
+      - results/plots/imputer_comparison.png
+      - results/tables/imputer_comparison.csv
+    metrics:
+      - artifacts/metrics/imputer_comparison.json:
+          cache: false
+
+  brand_model_analysis:
+    cmd: >-
+      python src/brand_model_analysis.py
+      --test-dir data/processed/pool_test
+      --train-dir data/processed/pool_train
+      --model-path artifacts/models/co2_model.joblib
+      --top-brands ${brand_model.top_brands}
+      --top-models ${brand_model.top_models}
+      --min-samples ${brand_model.min_samples}
+      --cv-folds ${brand_model.cv_folds}
+      --random-state ${brand_model.random_state}
+      --ablation
+    deps:
+      - data/processed/pool_test
+      - data/processed/pool_train
+      - artifacts/models/co2_model.joblib
+      - src/brand_model_analysis.py
+    params:
+      - brand_model
+    outs:
+      - results/plots/mae_by_brand.png
+      - results/plots/mae_by_model.png
+      - results/plots/volume_vs_mae.png
+      - results/tables/brand_analysis.csv
+      - results/tables/model_analysis.csv
+      - results/tables/ablation_brand_model.csv
+    metrics:
+      - results/reports/brand_model_report.json:
+          cache: false

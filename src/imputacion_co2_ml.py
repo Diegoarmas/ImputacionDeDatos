@@ -5,6 +5,7 @@ from collections import Counter
 from pathlib import Path
 
 import joblib
+import mlflow
 import numpy as np
 import pandas as pd
 from data_cleaning import TARGET_COLUMN, load_csv_resilient, prepare_dataframe
@@ -433,6 +434,29 @@ def _train_and_generate_outputs(
   with open(metrics_output_path, "w", encoding="utf-8") as f:
     json.dump(metrics, f, ensure_ascii=False, indent=2)
 
+  mlflow.log_params(
+    {
+      "missing_rate": missing_rate,
+      "cv_folds": args.cv_folds,
+      "random_state": args.random_state,
+      "device": args.device,
+      "model_backend": model_backend,
+      "input_dir": str(args.input_dir) if not args.input else str(args.input),
+    }
+  )
+  mlflow.log_metrics(
+    {
+      "mae": scores["mae"],
+      "rmse": scores["rmse"],
+      "r2": scores["r2"],
+      "mae_std": scores["mae_std"],
+      "rmse_std": scores["rmse_std"],
+      "r2_std": scores["r2_std"],
+    }
+  )
+  mlflow.log_artifact(str(model_output_path))
+  mlflow.log_artifact(str(metrics_output_path))
+
   print("Artefactos generados:")
   print(f"  CSV imputado: {output_path}")
   if args.simplificado:
@@ -492,6 +516,13 @@ def _evaluate_split_dataset(
         f"{split_name}_inputs_loaded": [str(p) for p in inputs],
       },
     )
+    mlflow.log_metrics(
+      {
+        f"{split_name}_mae": metrics[f"{split_name}_mae"],
+        f"{split_name}_rmse": metrics[f"{split_name}_rmse"],
+        f"{split_name}_r2": metrics[f"{split_name}_r2"],
+      }
+    )
 
   period_report[split_name] = _period_stats(df, args.period_column, TARGET_COLUMN)
 
@@ -524,41 +555,43 @@ def main() -> int:
     print(f"Error: {exc}")
     return 1
 
-  train_result = _train_and_generate_outputs(
-    train_df=train_df,
-    args=args,
-    loaded_inputs=train_inputs,
-    output_path=output_path,
-    simplified_output_path=simplified_output_path,
-    model_output_path=model_output_path,
-    metrics_output_path=metrics_output_path,
-  )
-  if train_result != 0:
-    return train_result
+  with mlflow.start_run():
+    train_result = _train_and_generate_outputs(
+      train_df=train_df,
+      args=args,
+      loaded_inputs=train_inputs,
+      output_path=output_path,
+      simplified_output_path=simplified_output_path,
+      model_output_path=model_output_path,
+      metrics_output_path=metrics_output_path,
+    )
+    if train_result != 0:
+      return train_result
 
-  period_report = {
-    "train": _period_stats(train_df, args.period_column, TARGET_COLUMN),
-    "period_column": args.period_column,
-  }
-
-  model_artifact = joblib.load(model_output_path)
-
-  val_dir = Path(args.val_dir) if args.val_dir else None
-  _evaluate_split_dataset(val_dir, args.val_pattern, "val", model_artifact, args, metrics_output_path, period_report)
-
-  test_dir = Path(args.test_dir) if args.test_dir else None
-  _evaluate_split_dataset(test_dir, args.test_pattern, "test", model_artifact, args, metrics_output_path, period_report)
-
-  with open(period_report_output_path, "w", encoding="utf-8") as f:
-    json.dump(period_report, f, ensure_ascii=False, indent=2)
-
-  _update_json(
-    metrics_output_path,
-    {
+    period_report = {
+      "train": _period_stats(train_df, args.period_column, TARGET_COLUMN),
       "period_column": args.period_column,
-      "period_report_output": str(period_report_output_path),
-    },
-  )
+    }
+
+    model_artifact = joblib.load(model_output_path)
+
+    val_dir = Path(args.val_dir) if args.val_dir else None
+    _evaluate_split_dataset(val_dir, args.val_pattern, "val", model_artifact, args, metrics_output_path, period_report)
+
+    test_dir = Path(args.test_dir) if args.test_dir else None
+    _evaluate_split_dataset(test_dir, args.test_pattern, "test", model_artifact, args, metrics_output_path, period_report)
+
+    with open(period_report_output_path, "w", encoding="utf-8") as f:
+      json.dump(period_report, f, ensure_ascii=False, indent=2)
+
+    _update_json(
+      metrics_output_path,
+      {
+        "period_column": args.period_column,
+        "period_report_output": str(period_report_output_path),
+      },
+    )
+    mlflow.log_artifact(str(period_report_output_path))
 
   print("\nReporte temporal generado:")
   print(f"  {period_report_output_path}")

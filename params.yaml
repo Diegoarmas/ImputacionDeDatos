@@ -1,0 +1,19 @@
+train:
+  missing_rate: 0.2
+  cv_folds: 5
+  random_state: 42
+  device: cpu
+  max_train_files: 20
+
+compare:
+  knn_neighbors: 5
+  missing_rate: 0.2
+  cv_folds: 5
+  max_files: 10
+
+brand_model:
+  top_brands: 20
+  top_models: 30
+  min_samples: 100
+  cv_folds: 5
+  random_state: 42

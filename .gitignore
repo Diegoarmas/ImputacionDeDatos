@@ -3,8 +3,10 @@
 /coverage
 /.env
 /data/raw/*
+!/data/raw/*.dvc
 /data/processed/pool*
 /.venv
+/mlruns
 
 # Python cache
 __pycache__/

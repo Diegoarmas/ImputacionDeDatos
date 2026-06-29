@@ -95,6 +95,36 @@ Instalacion:
 ./.venv/bin/pip install -r requirements.txt
 ```
 
+## Reproducibilidad (DVC + MLflow)
+
+El pipeline completo (depuración → entrenamiento → comparación de imputadores → análisis marca/modelo) está definido como un DAG en [dvc.yaml](dvc.yaml), parametrizado vía [params.yaml](params.yaml).
+
+```bash
+# Ejecutar todo el pipeline (solo corre los stages cuyas deps/params cambiaron)
+./.venv/bin/dvc repro
+
+# Ver el grafo de stages
+./.venv/bin/dvc dag
+
+# Ver/comparar métricas trackeadas por DVC (co2_metrics.json, imputer_comparison.json, etc.)
+./.venv/bin/dvc metrics show
+./.venv/bin/dvc metrics diff
+
+# Probar otro hiperparámetro y reproducir solo lo afectado
+# (editar params.yaml, p.ej. train.missing_rate)
+./.venv/bin/dvc repro
+```
+
+El dataset crudo (`data/raw/parque_vehiculos_202503.txt`) está versionado con `dvc add` (ver `data/raw/*.dvc`); el binario no se sube a git, solo su hash. No hay remote DVC configurado por defecto — para compartir datos entre máquinas, añadir uno con `dvc remote add`.
+
+Cada ejecución de `imputacion_co2_ml.py` y `compare_imputers.py` registra parámetros, métricas y artefactos en MLflow (carpeta local `mlruns/`):
+
+```bash
+./.venv/bin/mlflow ui
+```
+
+Esto levanta una UI en `http://localhost:5000` para comparar runs (MAE/RMSE/R² por `missing_rate`, `device`, técnica de imputación, etc.).
+
 ## Paso 1: Generar pools separados de TRAIN y TEST
 
 **Nuevo flujo recomendado**: Separar automáticamente los datos en pool_train (80%) y pool_test (20%) 

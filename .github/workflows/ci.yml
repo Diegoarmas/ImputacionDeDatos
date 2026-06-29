@@ -25,3 +25,6 @@ jobs:
 
       - name: Run tests
         run: python -m pytest tests/ -v
+
+      - name: Validate DVC pipeline graph
+        run: dvc dag
