@@ -73,28 +73,54 @@ que el modelo de producción.
   el bajo error refleja poca varianza dentro del grupo, no capacidad
   predictiva real.
 
-### Ablación: quitar MARCA/MODELO mejora el modelo
+### Ablación: efecto pequeño pero confirmado y reproducible
+
+El experimento se ejecutó **tres veces** con el mismo `random_state=42` y
+los mismos datos. Las dos últimas ejecuciones dieron resultados
+**bit-idénticos** (16 cifras significativas), confirmando que la
+implementación actual es totalmente determinista en este entorno:
 
 | Config | CV MAE | Test MAE | Test R² |
 |---|---|---|---|
-| Con MARCA/MODELO (original) | 9.76 | 6.45 | 0.833 |
-| Sin MARCA/MODELO (ablación) | 5.59 | 5.65 | 0.890 |
-| Δ (sin − con) | -4.17 | -0.80 | +0.057 |
+| Con MARCA/MODELO (original) | 5.34 | 5.27 | 0.907 |
+| Sin MARCA/MODELO (ablación) | 5.41 | 5.34 | 0.905 |
+| **Δ (sin − con)** | **+0.06** | **+0.07** | **-0.002** |
 
-**Quitar MARCA/MODELO mejora el modelo**, tanto en validación cruzada como
-en test. Con esas features hay además una brecha grande entre CV MAE (9.76)
-y test MAE (6.45) — síntoma de que son categóricas de alta cardinalidad que
-generan ruido/overfitting en la validación cruzada (categorías raras que
-caen en un fold y no en otro). Sin ellas, CV y test casi coinciden
-(5.59 vs 5.65), señal de un modelo más estable y mejor generalizado.
+**Nota sobre una discrepancia previa**: una versión anterior de este
+documento citaba un resultado muy distinto (Δ test MAE = **-0.80**, "quitar
+MARCA/MODELO mejora mucho"), tomado del CSV generado por el commit
+`79a1b88`. Al investigar la causa, se encontró que **no era ruido de
+entrenamiento sino un bug de metodología** ya corregido en el commit
+`42e8340` ("...including device configuration"):
+
+- En la versión vieja (`79a1b88`), el config "Con MARCA/MODELO" **no se
+  reentrenaba**: reutilizaba métricas de `artifacts/metrics/co2_metrics.json`
+  (un experimento distinto, con datos/configuración diferentes) o las
+  métricas globales del modelo de producción. El config "Sin MARCA/MODELO"
+  sí se entrenaba desde cero, pero siempre en **CPU**
+  (`device="cpu"` fijo), sin importar que el modelo de producción usara GPU.
+  Era una comparación de peras con manzanas.
+- En la versión actual (`42e8340`, la que usa este documento), ambos
+  configs se reentrenan desde cero, con el mismo pool, mismo `device`
+  (cuda) y mismo seed — comparación correcta y controlada. Ver
+  [src/brand_model_analysis.py:255-259](src/brand_model_analysis.py#L255-L259).
+
+Con la implementación corregida, el resultado es estable: **quitar
+MARCA/MODELO empeora ligeramente** el modelo (+0.067 g/km de MAE, -0.002 de
+R² en test), un efecto pequeño (~1.3% relativo sobre el MAE de 5.27) pero
+consistente en las tres ejecuciones.
 
 ## Conclusión práctica
 
-MARCA/MODELO no aportan señal incremental real más allá de lo que ya
-capturan las features numéricas (motor, peso, combustible, etc.), y sí
-añaden ruido. Vale la pena considerar:
-
-- Eliminarlas del pipeline de producción, o
-- Sustituirlas por una variable de categoría/segmento de menor cardinalidad
-  (p. ej. agrupando por tipo de vehículo) si se quiere conservar parte de
-  esa información sin el overfitting asociado a la alta cardinalidad.
+- MARCA/MODELO aportan una contribución **positiva pero pequeña** a la
+  precisión: sin ellas, el MAE de test sube de 5.27 a 5.34 g/km (+0.067) y
+  el R² baja de 0.907 a 0.905. El efecto es real y reproducible, no ruido.
+- La magnitud es demasiado pequeña para justificar eliminarlas solo por
+  precisión. Si se quitaran, sería por otras razones (reducir cardinalidad
+  de categóricas, simplificar el pipeline, evitar mantenimiento de un
+  encoder con cientos de marcas/modelos), asumiendo ese pequeño coste en
+  error.
+- Lo que sí es sólido y no depende de la ablación (viene de inferencia con
+  el modelo de producción ya entrenado, determinista) son los hallazgos por
+  marca/modelo de las secciones anteriores: la alta heterogeneidad de error
+  entre marcas/modelos y la mala generalización a motos/SUV de nicho.
