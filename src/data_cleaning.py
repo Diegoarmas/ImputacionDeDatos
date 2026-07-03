@@ -75,7 +75,13 @@ def prepare_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
 
   # Separa la variable objetivo para no usarla como feature.
   target = to_float_series(data[TARGET_COLUMN])
-  data = data.drop(columns=[TARGET_COLUMN])
+  
+  # Evitar fuga de datos (data leakage) eliminando etiquetas directamente derivadas del objetivo
+  drop_cols = [TARGET_COLUMN]
+  if "TIPO_DISTINTIVO" in data.columns:
+    drop_cols.append("TIPO_DISTINTIVO")
+    
+  data = data.drop(columns=drop_cols)
 
   # Convierte fechas en variables de calendario para el modelo.
   for col in DATE_COLUMNS:
@@ -88,6 +94,15 @@ def prepare_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
   numeric_columns = [c for c in KNOWN_NUMERIC_COLUMNS if c in data.columns]
   for col in numeric_columns:
     data[col] = to_float_series(data[col])
+
+  # Reglas especificas de limpieza de valores atipicos
+  if "CILINDRADA" in data.columns:
+    # Omitir cilindradas fisicamente imposibles para uso convencional
+    data.loc[data["CILINDRADA"] > 20000, "CILINDRADA"] = np.nan
+    # Omitir turismos con cilindradas extremadamente inusuales
+    if "TIPO_DGT" in data.columns:
+      mask_turismo = data["TIPO_DGT"].str.strip().str.upper() == "TURISMOS"
+      data.loc[mask_turismo & (data["CILINDRADA"] > 10000), "CILINDRADA"] = np.nan
 
   for col in data.columns:
     if (
