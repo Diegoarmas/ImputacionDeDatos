@@ -14,10 +14,16 @@ __pycache__/
 *$py.class
 *.pyo
 
-# Generated data files
+# Generated data files (CSV outputs del pipeline, demasiado grandes para git)
 muestra_imputada.csv
 data/processed/muestra_50k_co2_imputado.csv
 data/processed/datos_simpl.csv
+data/processed/*.csv
+data/processed/simplificado/
+
+# MLflow
+mlflow.db
+mlruns/
 
 # Results and plots
 /results/reports

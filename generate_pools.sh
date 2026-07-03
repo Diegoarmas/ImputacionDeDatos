@@ -7,11 +7,11 @@ set -e
 echo "=== Generando pools TRAIN/VAL/TEST separados ==="
 
 # Configuración
-INPUT="data/raw/parque_vehiculos_202503.txt"
+INPUT="data/raw/parque_vehiculos_202512.txt"
 POOL_TRAIN="data/processed/pool_train"
 POOL_VAL="data/processed/pool_val"
 POOL_TEST="data/processed/pool_test"
-ROWS_PER_SAMPLE=100000
+ROWS_PER_SAMPLE=200000
 TRAIN_RATIO=0.70
 VAL_RATIO=0.15
 

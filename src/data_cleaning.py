@@ -75,25 +75,26 @@ def prepare_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
 
   # Separa la variable objetivo para no usarla como feature.
   target = to_float_series(data[TARGET_COLUMN])
-  
+
   # Evitar fuga de datos (data leakage) eliminando etiquetas directamente derivadas del objetivo
   drop_cols = [TARGET_COLUMN]
   if "TIPO_DISTINTIVO" in data.columns:
     drop_cols.append("TIPO_DISTINTIVO")
-    
+
   data = data.drop(columns=drop_cols)
 
   # Convierte fechas en variables de calendario para el modelo.
   for col in DATE_COLUMNS:
     if col in data.columns:
       parsed = pd.to_datetime(data[col], format="%d/%m/%Y", errors="coerce")
-      data[f"{col}_YEAR"] = parsed.dt.year
-      data[f"{col}_MONTH"] = parsed.dt.month
+      data[f"{col}_YEAR"] = parsed.dt.year.astype("float32")
+      data[f"{col}_MONTH"] = parsed.dt.month.astype("float32")
       data = data.drop(columns=[col])
 
   numeric_columns = [c for c in KNOWN_NUMERIC_COLUMNS if c in data.columns]
   for col in numeric_columns:
-    data[col] = to_float_series(data[col])
+    # float32 ocupa la mitad que float64 sin perdida relevante para CO2.
+    data[col] = to_float_series(data[col]).astype("float32")
 
   # Reglas especificas de limpieza de valores atipicos
   if "CILINDRADA" in data.columns:
@@ -110,8 +111,10 @@ def prepare_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
       and not col.endswith("_YEAR")
       and not col.endswith("_MONTH")
     ):
+      # category ocupa mucho menos que object para columnas de alta repeticion.
       data[col] = (
         data[col].astype(str).str.strip().replace({"": np.nan, "nan": np.nan})
+        .astype("category")
       )
 
   return data, target

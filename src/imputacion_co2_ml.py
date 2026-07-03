@@ -114,7 +114,7 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
     "--max-train-files",
     type=int,
-    default=20,
+    default=0,
     help="Maximo de archivos CSV a cargar de train (0 = sin limite).",
   )
   parser.add_argument(
