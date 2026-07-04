@@ -1,0 +1,23 @@
+{
+  "meta": {
+    "train_files": 5,
+    "train_rows_dgt": 851686,
+    "nrcan_rows_added": 3526,
+    "val_rows": 510603,
+    "correction_factor": 0.4549,
+    "only_european": true,
+    "model": "HistGradientBoostingRegressor"
+  },
+  "baseline": {
+    "mae": 5.4944,
+    "rmse": 12.5664,
+    "r2": 0.9032,
+    "n_val": 510603
+  },
+  "augmented": {
+    "mae": 5.4186,
+    "rmse": 12.4689,
+    "r2": 0.9047,
+    "n_val": 510603
+  }
+}
