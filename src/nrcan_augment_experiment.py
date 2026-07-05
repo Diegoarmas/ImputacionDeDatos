@@ -468,6 +468,49 @@ def evaluate(model: Pipeline, X_val: pd.DataFrame, y_val: pd.Series) -> dict:
     return {"mae": round(mae, 4), "rmse": round(rmse, 4), "r2": round(r2, 4), "n_val": int(len(y_val))}
 
 
+# Segmentos temporales: NRCan cubre ~1990-2010, objetivo es cubrir vehículos
+# antiguos del DGT que carecen de CO₂ declarado.
+YEAR_SEGMENTS = [
+    ("pre_2000",  None, 2000),
+    ("2000_2009", 2000, 2010),
+    ("2010_2019", 2010, 2020),
+    ("2020_plus", 2020, None),
+]
+
+
+def evaluate_by_year(
+    model: Pipeline,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+) -> dict:
+    """Métricas segmentadas por año de matriculación (FECHA_MATR_YEAR)."""
+    year_col = None
+    for c in ("FECHA_MATR_YEAR", "FEC_PRIM_MATR_YEAR"):
+        if c in X_val.columns:
+            year_col = c
+            break
+    if year_col is None:
+        return {}
+
+    years = pd.to_numeric(X_val[year_col], errors="coerce")
+    segments: dict = {}
+    for name, lo, hi in YEAR_SEGMENTS:
+        mask = pd.Series(True, index=X_val.index)
+        if lo is not None:
+            mask &= years >= lo
+        if hi is not None:
+            mask &= years < hi
+        n = int(mask.sum())
+        if n < 10:
+            segments[name] = {"n": n, "mae": None, "r2": None}
+            continue
+        y_pred = model.predict(X_val[mask])
+        mae = float(mean_absolute_error(y_val[mask], y_pred))
+        r2  = float(r2_score(y_val[mask], y_pred))
+        segments[name] = {"n": n, "mae": round(mae, 4), "r2": round(r2, 4)}
+    return segments
+
+
 # ===========================================================================
 # 6. CARGA DE DATOS DGT
 # ===========================================================================
@@ -709,7 +752,14 @@ def main() -> int:
     pipe_baseline = build_hgbt_pipeline(X_tr)
     pipe_baseline.fit(X_tr, y_tr)
     metrics_baseline = evaluate(pipe_baseline, X_vl, y_vl)
+    by_year_baseline = evaluate_by_year(pipe_baseline, X_vl, y_vl)
     print(f"  → MAE={metrics_baseline['mae']:.4f}  RMSE={metrics_baseline['rmse']:.4f}  R²={metrics_baseline['r2']:.4f}")
+    if by_year_baseline:
+        print("  Por segmento de año:")
+        for seg, m in by_year_baseline.items():
+            tag = seg.replace("_", " ")
+            if m["mae"] is not None:
+                print(f"    {tag:12s}  n={m['n']:>7,}  MAE={m['mae']:.4f}  R²={m['r2']:.4f}")
 
     del pipe_baseline; gc.collect()
 
@@ -725,7 +775,17 @@ def main() -> int:
     pipe_augmented = build_hgbt_pipeline(X_aug)
     pipe_augmented.fit(X_aug, y_aug)
     metrics_augmented = evaluate(pipe_augmented, X_vl, y_vl)
+    by_year_augmented = evaluate_by_year(pipe_augmented, X_vl, y_vl)
     print(f"  → MAE={metrics_augmented['mae']:.4f}  RMSE={metrics_augmented['rmse']:.4f}  R²={metrics_augmented['r2']:.4f}")
+    if by_year_augmented:
+        print("  Por segmento de año:")
+        for seg, m in by_year_augmented.items():
+            tag = seg.replace("_", " ")
+            bseg = by_year_baseline.get(seg, {})
+            if m["mae"] is not None and bseg.get("mae") is not None:
+                delta = m["mae"] - bseg["mae"]
+                arrow = "↓" if delta < 0 else ("↑" if delta > 0 else "=")
+                print(f"    {tag:12s}  n={m['n']:>7,}  MAE={m['mae']:.4f}  R²={m['r2']:.4f}  Δ={delta:+.4f} {arrow}")
 
     del pipe_augmented; gc.collect()
 
@@ -760,6 +820,8 @@ def main() -> int:
         },
         "baseline":  metrics_baseline,
         "augmented": metrics_augmented,
+        "by_year_baseline":  by_year_baseline,
+        "by_year_augmented": by_year_augmented,
     }
 
     print_summary(results)

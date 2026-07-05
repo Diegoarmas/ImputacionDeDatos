@@ -4,7 +4,15 @@
     "train_rows_dgt": 851686,
     "nrcan_rows_added": 3526,
     "val_rows": 510603,
-    "correction_factor": 0.4549,
+    "correction": {
+      "method": "fuel_type",
+      "factors": {
+        "G (gasolina)": 0.8299,
+        "D (diesel)": 0.6549,
+        "O (otros)": 0.8244,
+        "source": "comparacion_eu_canada.md — EEA-2010 vs NRCan-2010, 371 pares"
+      }
+    },
     "only_european": true,
     "model": "HistGradientBoostingRegressor"
   },
@@ -15,9 +23,53 @@
     "n_val": 510603
   },
   "augmented": {
-    "mae": 5.4186,
-    "rmse": 12.4689,
-    "r2": 0.9047,
+    "mae": 5.5179,
+    "rmse": 12.5322,
+    "r2": 0.9038,
     "n_val": 510603
+  },
+  "by_year_baseline": {
+    "pre_2000": {
+      "n": 295,
+      "mae": 22.7533,
+      "r2": 0.3288
+    },
+    "2000_2009": {
+      "n": 738,
+      "mae": 17.5627,
+      "r2": 0.5391
+    },
+    "2010_2019": {
+      "n": 305762,
+      "mae": 5.3723,
+      "r2": 0.8676
+    },
+    "2020_plus": {
+      "n": 203808,
+      "mae": 5.609,
+      "r2": 0.9283
+    }
+  },
+  "by_year_augmented": {
+    "pre_2000": {
+      "n": 295,
+      "mae": 23.5365,
+      "r2": 0.2977
+    },
+    "2000_2009": {
+      "n": 738,
+      "mae": 18.5523,
+      "r2": 0.5598
+    },
+    "2010_2019": {
+      "n": 305762,
+      "mae": 5.3722,
+      "r2": 0.867
+    },
+    "2020_plus": {
+      "n": 203808,
+      "mae": 5.6632,
+      "r2": 0.9294
+    }
   }
 }
