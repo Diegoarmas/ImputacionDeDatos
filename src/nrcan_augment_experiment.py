@@ -12,8 +12,11 @@ Flujo
 1. Carga datos DGT de pool_train y pool_val.
 2. Carga / descarga datos NRCan (Fuel Consumption Ratings, 1995-actual).
 3. Filtra NRCan a marcas europeas presentes en el parque DGT.
-4. Calcula factor de corrección empírico (ciclo EPA → ciclo EU) comparando
-   medianas de CO₂ por marca y tipo de combustible.
+4. Aplica factor de corrección validado (ciclo EPA → ciclo EU/NEDC) derivado del
+   análisis empírico EEA-2010 vs NRCan-2010 (comparacion_eu_canada.md):
+     · Por tipo de combustible: gasolina 1/1.205, diésel 1/1.527
+     · Regresión lineal: CO₂_EU = (CO₂_CA − 134.6) / 0.605  [R²=0.55]
+   Método seleccionable via --correction-method {fuel_type|regression}.
 5. BASELINE  : entrena HGBT únicamente con datos DGT; evalúa en pool_val.
 6. AUGMENTADO: entrena HGBT con DGT + filas NRCan corregidas; evalúa en pool_val.
 7. Guarda JSON con métricas y PNG con gráfico comparativo.
@@ -108,8 +111,33 @@ NRCAN_FUEL_TO_PROPULSION = {
 # Columnas numéricas DGT conocidas (subset disponible desde NRCan)
 NUMERIC_FROM_NRCAN = ["CILINDRADA", "FECHA_MATR_YEAR", "FEC_PRIM_MATR_YEAR"]
 
-# Valor de fallback si no hay suficientes pares para calcular el factor
-DEFAULT_CORRECTION_FACTOR = 1.25  # ratio típico NEDC/EPA de literatura
+# ---------------------------------------------------------------------------
+# Factores de corrección EPA → NEDC validados empíricamente en
+# comparacion_eu_canada.md  (EEA 2010 vs NRCan 2010, 371 pares emparejados)
+#
+#   Ratio CA/EU global      : 1.213   (+21 %)
+#   Por combustible:
+#     Gasolina (n=362)       : 1.205   → factor EU/CA = 0.8299
+#     Diésel   (n=9)         : 1.527   → factor EU/CA = 0.6549
+#   Regresión lineal (R²=0.55):
+#     CO₂_CA = 0.605 × CO₂_EU + 134.63
+#     → CO₂_EU = (CO₂_CA − 134.63) / 0.605
+#
+# NOTA: estos factores corresponden al ciclo NEDC (era pre-2018).
+# Para vehículos post-2018 con homologación WLTP en DGT, el sesgo sería
+# menor porque WLTP es más exigente que NEDC (más próximo al ciclo EPA).
+# ---------------------------------------------------------------------------
+
+# Factor EU/CA por categoría de combustible (gasolina / diésel / desconocido)
+CORRECTION_BY_FUEL: dict[str, float] = {
+    "G": 1.0 / 1.205,   # gasolina → EU ≈ CA / 1.205 = CA × 0.8299
+    "D": 1.0 / 1.527,   # diésel   → EU ≈ CA / 1.527 = CA × 0.6549
+    "O": 1.0 / 1.213,   # otros    → ratio global como fallback
+}
+
+# Constantes de la regresión lineal EEA↔NRCan
+REG_SLOPE     = 0.605
+REG_INTERCEPT = 134.63
 
 
 # ===========================================================================
@@ -261,73 +289,78 @@ def filter_european_brands(nrcan: pd.DataFrame) -> pd.DataFrame:
 
 
 # ===========================================================================
-# 3. FACTOR DE CORRECCIÓN EMPÍRICO (ciclo EPA → ciclo EU)
+# 3. CORRECCIÓN VALIDADA (ciclo EPA → ciclo EU/NEDC)
 # ===========================================================================
 
-def compute_correction_factor(
-    dgt_train_df: pd.DataFrame,
+def _fuel_cat(fuel_type_nrcan: str) -> str:
+    """Mapea el código de combustible NRCan a la categoría de corrección."""
+    f = str(fuel_type_nrcan).strip().upper()
+    if f in ("X", "Z", "B"):
+        return "G"  # gasolina / PHEV gasolina
+    if f == "D":
+        return "D"  # diésel
+    return "O"      # otros (GLP, E85, eléctrico…)
+
+
+def correct_co2_fuel_type(co2_ca: float, fuel_type_nrcan: str) -> float:
+    """
+    Aplica el factor de corrección validado por tipo de combustible.
+
+    Fuente: comparacion_eu_canada.md — análisis EEA-2010 vs NRCan-2010,
+    371 pares emparejados por (marca, modelo, cilindrada ±200cc, combustible).
+
+      Gasolina: ratio CA/EU = 1.205  → EU = CA / 1.205
+      Diésel:   ratio CA/EU = 1.527  → EU = CA / 1.527
+      Otros:    ratio CA/EU = 1.213  (ratio global, fallback)
+    """
+    factor = CORRECTION_BY_FUEL[_fuel_cat(fuel_type_nrcan)]
+    return co2_ca * factor
+
+
+def correct_co2_regression(co2_ca: float) -> float:
+    """
+    Aplica la regresión lineal inversa EEA↔NRCan para estimar CO₂ EU.
+
+    Modelo ajustado: CO₂_CA = 0.605 × CO₂_EU + 134.63  (R²=0.55, RMSE=66 g/km)
+    Inversa:         CO₂_EU = (CO₂_CA − 134.63) / 0.605
+
+    Más preciso que el factor simple, pero con mayor incertidumbre en los
+    extremos del rango (vehículos de muy baja o muy alta emisión).
+    Valores CO₂_CA < 134.63 g/km producen estimaciones negativas → se clampean
+    al mínimo físico de 50 g/km.
+    """
+    eu = (co2_ca - REG_INTERCEPT) / REG_SLOPE
+    return max(eu, 50.0)
+
+
+def apply_correction(
     nrcan_df: pd.DataFrame,
-) -> float:
+    method: str,
+) -> pd.Series:
     """
-    Estima el factor de corrección (EU_CO2 / NRCan_CO2) comparando medianas
-    por marca y tipo de combustible entre los dos conjuntos.
+    Devuelve una Series con los CO₂ NRCan corregidos al ciclo EU/NEDC.
 
-    Sólo usa vehículos DGT con CO₂ conocido (>0).
-    Devuelve DEFAULT_CORRECTION_FACTOR si hay <10 pares válidos.
+    method:
+      'fuel_type'  — factor por tipo de combustible (gasolina/diésel/otro).
+      'regression' — regresión lineal inversa EEA↔NRCan (independiente del combustible).
     """
-    print("\nCalculando factor de corrección empírico...")
+    if method == "regression":
+        print(f"  Método de corrección: regresión lineal  "
+              f"[CO₂_EU = (CO₂_CA − {REG_INTERCEPT}) / {REG_SLOPE}]")
+        corrected = nrcan_df["co2_gkm"].apply(correct_co2_regression)
+    else:
+        print(f"  Método de corrección: por tipo de combustible  "
+              f"[G/1.205, D/1.527, O/1.213]")
+        corrected = pd.Series([
+            correct_co2_fuel_type(row["co2_gkm"], row["fuel_type"])
+            for _, row in nrcan_df.iterrows()
+        ], index=nrcan_df.index)
 
-    # Prepara DGT con CO₂ conocido
-    if TARGET_COLUMN not in dgt_train_df.columns:
-        print(f"  AVISO: '{TARGET_COLUMN}' no en DGT → usando factor por defecto")
-        return DEFAULT_CORRECTION_FACTOR
-
-    dgt = dgt_train_df[["MARCA", "PROPULSION", TARGET_COLUMN]].copy()
-    dgt[TARGET_COLUMN] = pd.to_numeric(
-        dgt[TARGET_COLUMN].astype(str).str.replace(",", "."), errors="coerce"
-    )
-    dgt = dgt[(dgt[TARGET_COLUMN] > 0) & dgt[TARGET_COLUMN].notna()]
-    dgt["make_norm"] = _normalize_col(dgt["MARCA"])
-
-    # Grupo: (make, propulsion_cat)  donde prop_cat = gasolina | diesel | otro
-    def _prop_cat(p: str) -> str:
-        p = str(p).strip()
-        if p in ("1",): return "G"
-        if p in ("2",): return "D"
-        return "O"
-
-    dgt["prop_cat"] = dgt["PROPULSION"].apply(_prop_cat)
-    dgt_grp = dgt.groupby(["make_norm", "prop_cat"])[TARGET_COLUMN].median()
-
-    # Grupo equivalente en NRCan
-    def _fuel_cat(f: str) -> str:
-        f = str(f).strip().upper()
-        if f in ("X", "Z", "B"): return "G"
-        if f in ("D",):           return "D"
-        return "O"
-
-    nrcan = nrcan_df.copy()
-    nrcan["prop_cat"] = nrcan["fuel_type"].apply(_fuel_cat)
-    nrcan_grp = nrcan.groupby(["make", "prop_cat"])["co2_gkm"].median()
-
-    # Empareja por índice (make, prop_cat)
-    ratios: list[float] = []
-    for key in dgt_grp.index:
-        make, pcat = key
-        if key in nrcan_grp.index:
-            eu_co2  = dgt_grp[key]
-            can_co2 = nrcan_grp[key]
-            if can_co2 > 0:
-                ratios.append(eu_co2 / can_co2)
-
-    if len(ratios) < 5:
-        print(f"  Sólo {len(ratios)} pares → usando factor por defecto {DEFAULT_CORRECTION_FACTOR:.3f}")
-        return DEFAULT_CORRECTION_FACTOR
-
-    factor = float(np.median(ratios))
-    print(f"  {len(ratios)} pares emparejados → factor de corrección = {factor:.4f}")
-    print(f"  (min={min(ratios):.3f}, max={max(ratios):.3f}, σ={np.std(ratios):.3f})")
-    return factor
+    print(f"  CO₂ NRCan original  — media: {nrcan_df['co2_gkm'].mean():.1f} g/km, "
+          f"mediana: {nrcan_df['co2_gkm'].median():.1f} g/km")
+    print(f"  CO₂ NRCan corregido — media: {corrected.mean():.1f} g/km, "
+          f"mediana: {corrected.median():.1f} g/km")
+    return corrected
 
 
 # ===========================================================================
@@ -337,26 +370,31 @@ def compute_correction_factor(
 def nrcan_to_prepared(
     nrcan_df: pd.DataFrame,
     dgt_feature_cols: list[str],
-    correction_factor: float,
+    co2_corrected: pd.Series,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """
     Convierte filas NRCan al formato de características DGT listo para el modelo.
 
-    Columnas disponibles desde NRCan:
-      MARCA        → make (normalizado)
-      MODELO       → model
-      CILINDRADA   → engine_l × 1000  (cc)
-      PROPULSION   → fuel_type mapeado
-      FECHA_MATR_YEAR / FEC_PRIM_MATR_YEAR → year
-      EMISIONES_CO2 → co2_gkm × correction_factor
+    Columnas mapeadas desde NRCan:
+      MARCA              → make (normalizado, uppercase)
+      MODELO             → model
+      CILINDRADA         → engine_l × 1000  (cc)
+      PROPULSION         → fuel_type mapeado a código DGT
+      FECHA_MATR_YEAR /
+      FEC_PRIM_MATR_YEAR → year del modelo
+      EMISIONES_CO2      → co2_corrected (ya convertido al ciclo EU/NEDC)
 
-    El resto de columnas DGT se rellenan con NaN; el imputador del pipeline
-    las maneja nativamente (HGBT tolera NaN en features).
+    El resto de columnas DGT se dejan a NaN; HGBT tolera missing en features.
+
+    Parámetros
+    ----------
+    co2_corrected : pd.Series
+        CO₂ en g/km ya corregido al ciclo EU, resultado de apply_correction().
     """
     n = len(nrcan_df)
     X = pd.DataFrame(np.nan, index=range(n), columns=dgt_feature_cols)
 
-    # Columnas numéricas disponibles
+    # --- Numéricas ---
     if "CILINDRADA" in X.columns:
         X["CILINDRADA"] = (nrcan_df["engine_l"].values * 1000).astype("float32")
 
@@ -364,10 +402,7 @@ def nrcan_to_prepared(
         if yr_col in X.columns:
             X[yr_col] = nrcan_df["year"].values.astype("float32")
 
-    # Columnas categóricas disponibles → asignar como string, luego pasar a category
-    cat_cols = [c for c in dgt_feature_cols if X[c].dtype == object or
-                (hasattr(X[c], "cat"))]  # detectamos categoricals post-asignación
-
+    # --- Categóricas ---
     if "MARCA" in X.columns:
         X["MARCA"] = nrcan_df["make"].values
 
@@ -379,9 +414,9 @@ def nrcan_to_prepared(
             lambda f: NRCAN_FUEL_TO_PROPULSION.get(str(f).strip().upper(), np.nan)
         )
 
-    # Target corregido
+    # --- Target corregido ---
     y = pd.Series(
-        nrcan_df["co2_gkm"].values * correction_factor,
+        co2_corrected.values,
         name=TARGET_COLUMN,
         dtype="float32",
     )
@@ -506,8 +541,8 @@ def save_plot(results: dict, path: Path) -> None:
 def print_summary(results: dict) -> None:
     b = results["baseline"]
     a = results["augmented"]
-    cf = results["meta"]["correction_factor"]
-    n_nrcan = results["meta"]["nrcan_rows_added"]
+    meta = results["meta"]
+    n_nrcan = meta["nrcan_rows_added"]
 
     delta_mae  = a["mae"]  - b["mae"]
     delta_rmse = a["rmse"] - b["rmse"]
@@ -523,7 +558,7 @@ def print_summary(results: dict) -> None:
     print(f"{'RMSE':12}  {b['rmse']:12.4f}  {a['rmse']:12.4f}  {_sign(delta_rmse):>10}")
     print(f"{'R²':12}  {b['r2']:12.4f}  {a['r2']:12.4f}  {_sign(delta_r2):>10}")
     print("=" * 65)
-    print(f"\nFactor de corrección EPA→EU : {cf:.4f}")
+    print(f"\nMétodo de corrección EPA→EU : {meta['correction']['method']}")
     print(f"Filas NRCan añadidas        : {n_nrcan:,}")
     print(f"Filas val evaluadas         : {b['n_val']:,}")
 
@@ -570,8 +605,15 @@ def parse_args() -> argparse.Namespace:
         help="Filtrar NRCan sólo a marcas europeas (defecto: activado).",
     )
     p.add_argument(
-        "--correction-factor", type=float, default=0.0,
-        help="Factor de corrección EPA→EU fijo (0 = calcular empíricamente).",
+        "--correction-method",
+        choices=["fuel_type", "regression"],
+        default="fuel_type",
+        help=(
+            "Método de corrección EPA→EU/NEDC:\n"
+            "  fuel_type  — factor por combustible: gasolina/1.205, diésel/1.527 "
+            "(fuente: comparacion_eu_canada.md, 371 pares EEA-2010 vs NRCan-2010)\n"
+            "  regression — inversa de CO₂_CA = 0.605×CO₂_EU + 134.63 (R²=0.55)"
+        ),
     )
     p.add_argument(
         "--json-output", default="results/nrcan_augment_experiment.json",
@@ -645,17 +687,13 @@ def main() -> int:
     print(f"  Filas NRCan tras filtrado: {len(nrcan_df):,}")
 
     # ------------------------------------------------------------------
-    # Paso 4: Factor de corrección
+    # Paso 4: Corrección validada EPA → EU/NEDC
     # ------------------------------------------------------------------
-    print("\n[4/6] Factor de corrección EPA → EU...")
-    if args.correction_factor > 0:
-        cf = args.correction_factor
-        print(f"  Factor fijo por argumento: {cf:.4f}")
-    else:
-        cf = compute_correction_factor(dgt_train_raw, nrcan_df)
+    print(f"\n[4/6] Corrigiendo CO₂ NRCan al ciclo EU (método: {args.correction_method})...")
+    co2_corrected = apply_correction(nrcan_df, args.correction_method)
 
     # Convierte NRCan al esquema de features DGT
-    X_nrcan, y_nrcan = nrcan_to_prepared(nrcan_df, list(X_tr.columns), cf)
+    X_nrcan, y_nrcan = nrcan_to_prepared(nrcan_df, list(X_tr.columns), co2_corrected)
 
     # Alinea tipos con X_tr (numéricas float32, categóricas object)
     for col in X_tr.columns:
@@ -694,13 +732,29 @@ def main() -> int:
     # ------------------------------------------------------------------
     # Resultados
     # ------------------------------------------------------------------
+    correction_meta: dict = {"method": args.correction_method}
+    if args.correction_method == "fuel_type":
+        correction_meta["factors"] = {
+            "G (gasolina)": round(CORRECTION_BY_FUEL["G"], 4),
+            "D (diesel)":   round(CORRECTION_BY_FUEL["D"], 4),
+            "O (otros)":    round(CORRECTION_BY_FUEL["O"], 4),
+            "source": "comparacion_eu_canada.md — EEA-2010 vs NRCan-2010, 371 pares",
+        }
+    else:
+        correction_meta["regression"] = {
+            "formula": f"CO2_EU = (CO2_CA - {REG_INTERCEPT}) / {REG_SLOPE}",
+            "r2": 0.548,
+            "rmse_gkm": 66.1,
+            "source": "comparacion_eu_canada.md — EEA-2010 vs NRCan-2010, 371 pares",
+        }
+
     results = {
         "meta": {
             "train_files": args.max_train_files,
             "train_rows_dgt": int(len(X_tr)),
             "nrcan_rows_added": int(len(X_nrcan)),
             "val_rows": int(len(X_vl)),
-            "correction_factor": round(cf, 4),
+            "correction": correction_meta,
             "only_european": args.only_european,
             "model": "HistGradientBoostingRegressor",
         },
