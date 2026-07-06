@@ -212,6 +212,16 @@ def _save_json(results: list[dict], path: Path, meta: dict) -> None:
   print(f"  JSON:      {path}")
 
 
+TECHNIQUE_LABELS = {
+  "mean": "Mean\n(Dummy)",
+  "median": "Median\n(Dummy)",
+  "linear": "Linear\nRegression",
+  "knn": "KNN\nRegressor",
+  "rf": "Random\nForest",
+  "hgbt": "HistGradientBoosting",
+}
+
+
 def _save_plot(results: list[dict], path: Path) -> None:
   import matplotlib.pyplot as plt
   import matplotlib.ticker as ticker
@@ -220,6 +230,7 @@ def _save_plot(results: list[dict], path: Path) -> None:
 
   df = pd.DataFrame(results).sort_values("mae").reset_index(drop=True)
   techniques = df["technique"].tolist()
+  labels = [TECHNIQUE_LABELS.get(t, t) for t in techniques]
   x = np.arange(len(techniques))
 
   fig, axes = plt.subplots(1, 3, figsize=(14, 5))
@@ -236,7 +247,7 @@ def _save_plot(results: list[dict], path: Path) -> None:
     errs = df[f"{metric}_std"].values
     bars = ax.bar(x, vals, yerr=errs, color=color, alpha=0.8, capsize=4, width=0.6)
     ax.set_xticks(x)
-    ax.set_xticklabels(techniques, rotation=30, ha="right", fontsize=9)
+    ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
     ax.set_ylabel(ylabel, fontsize=9)
     ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
     ax.grid(axis="y", linestyle="--", alpha=0.4)
