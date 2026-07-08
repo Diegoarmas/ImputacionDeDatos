@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
   )
   parser.add_argument(
     "--input",
-    default="data/raw/parque_vehiculos_202512.txt",
+    default="data/raw/parque_vehiculos_202503.txt",
     help="Ruta del archivo de entrada.",
   )
   parser.add_argument(

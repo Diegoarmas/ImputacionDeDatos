@@ -26,18 +26,19 @@ Script: `src/depuracion_txt.py`
 
 Entrada tipica:
 
-- `data/raw/muestra_50k.txt`
+- `data/raw/parque_vehiculos_202503.txt`
 
-Salida tipica:
+Salida tipica (modo pool, recomendado):
 
-- `data/processed/muestra_50k_con_co2.csv`
+- `data/processed/pool_train/`, `data/processed/pool_val/`, `data/processed/pool_test/`
 
 Que hace:
 
 1. Lee por chunks para no cargar todo a memoria.
 2. Opcionalmente reduce columnas (`--columns`).
 3. Filtra filas donde `EMISIONES_CO2` esta informado (no vacio, no `nan`, no `none`, no `null`).
-4. Escribe CSV final en UTF-8.
+4. Reparte cada fila en train/val/test de forma determinista (bucket `indice % 10_000` segun `--train-ratio`/`--val-ratio`).
+5. Escribe CSVs por bloques (`--rows-per-sample` filas cada uno) en UTF-8, uno por pool.
 
 ## 4. Limpieza y preparacion de features
 
@@ -104,7 +105,7 @@ Modulo: `src/modeling.py`
 
 ### 5.1 Deteccion automatica de tipos
 
-Funcion: `build_pipeline(feature_df, random_state)`
+Funcion: `build_pipeline(feature_df, random_state, device)`
 
 - `numeric_columns`: columnas con dtype numerico.
 - `categorical_columns`: resto de columnas.
@@ -126,15 +127,14 @@ Union de ambos:
 
 ### 5.3 Modelo final
 
-- `HistGradientBoostingRegressor`
+Backend seleccionable via `--device`:
 
-Hiperparametros actuales:
+- `--device cpu` (default): `HistGradientBoostingRegressor` con `max_iter=350`, `learning_rate=0.05`,
+  `max_depth=8`, `min_samples_leaf=20`.
+- `--device cuda`: `XGBRegressor` en GPU (`tree_method="hist"`, `device="cuda"`) con `n_estimators=400`,
+  `learning_rate=0.05`, `max_depth=6`, `min_child_weight=5`, `subsample=0.8`, `colsample_bytree=0.8`.
 
-- `max_iter=350`
-- `learning_rate=0.05`
-- `max_depth=8`
-- `min_samples_leaf=20`
-- `random_state` configurable por CLI
+En ambos casos, `random_state` es configurable por CLI.
 
 ### 5.4 Evaluacion
 
@@ -154,13 +154,18 @@ Script: `src/imputacion_co2_ml.py`
 
 ### 6.1 Parametros CLI relevantes
 
-- `--input`: CSV con CO2 conocido (por defecto `muestra_50k_con_co2.csv`).
-- `--output`: CSV completo con columnas de CO2 e imputacion.
-- `--missing-rate`: porcentaje/proporcion a ocultar (`0.2` o `20`).
+- `--input`: CSV individual (opcional). Si se omite, se usa `--input-dir` (modo pool).
+- `--input-dir`: directorio con CSVs de TRAIN (default: `data/processed/pool_train`).
+- `--val-dir` / `--test-dir`: directorios de VALIDACION y TEST, evaluados tras el entrenamiento (opcionales).
+- `--output`: CSV completo con columnas de CO2 e imputacion (default: `data/processed/22_05.csv`).
+- `--missing-rate`: proporcion a ocultar en train, entre 0 y 1 (default: `0.2`).
 - `--cv-folds`: folds de validacion cruzada.
 - `--random-state`: semilla global del proceso.
+- `--device`: `cpu` o `cuda`, backend del modelo (ver 5.3).
+- `--max-train-files`: limite de archivos CSV a cargar de train (0 = sin limite).
 - `--simplificado`: genera CSV adicional con solo filas ocultadas.
-- `--simplificado-output`: ruta de ese CSV simplificado.
+- `--simplificado-output`: ruta de ese CSV simplificado (default: `data/processed/simplificado/datos_simpl.csv`).
+- `--period-column` / `--period-report-output`: columna de fecha y ruta del reporte de cobertura temporal por split.
 
 ### 6.2 Missing artificial controlado
 
@@ -209,12 +214,19 @@ Metricas incluyen, entre otras:
 
 ## 7. Como ejecutar
 
-### 7.1 Depurar raw
+Ver [README.md](README.md) para el flujo completo (generar pools → entrenar → comparar imputadores →
+analisis marca/modelo) y para el DAG de DVC. Resumen equivalente en comandos manuales:
+
+### 7.1 Depurar raw y generar pools train/val/test
 
 ```bash
-python3 src/depuracion_txt.py \
-  --input data/raw/muestra_50k.txt \
-  --output data/processed/muestra_50k_con_co2.csv \
+./.venv/bin/python src/depuracion_txt.py \
+  --input data/raw/parque_vehiculos_202503.txt \
+  --pool-dir data/processed/pool_train \
+  --pool-val-dir data/processed/pool_val \
+  --pool-test-dir data/processed/pool_test \
+  --train-ratio 0.7 \
+  --val-ratio 0.15 \
   --in-sep '|' \
   --out-sep ','
 ```
@@ -222,10 +234,11 @@ python3 src/depuracion_txt.py \
 ### 7.2 Entrenar e imputar con 20% missing artificial
 
 ```bash
-python3 src/imputacion_co2_ml.py \
-  --input data/processed/muestra_50k_con_co2.csv \
-  --output data/processed/muestra_50k_co2_imputado.csv \
-  --missing-rate 20 \
+./.venv/bin/python src/imputacion_co2_ml.py \
+  --input-dir data/processed/pool_train \
+  --val-dir data/processed/pool_val \
+  --test-dir data/processed/pool_test \
+  --missing-rate 0.2 \
   --cv-folds 5 \
   --random-state 42 \
   --simplificado

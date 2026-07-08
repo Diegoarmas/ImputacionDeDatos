@@ -74,15 +74,23 @@ La única alternativa que merece evaluación experimental es **LightGBM** con so
 
 - [src/imputacion_co2_ml.py](src/imputacion_co2_ml.py): script principal (orquesta carga, entrenamiento, imputacion y guardado).
 - [src/data_cleaning.py](src/data_cleaning.py): funciones de limpieza y reparacion de CSV malformado.
-- [src/modeling.py](src/modeling.py): construccion del pipeline y evaluacion del modelo.
-- [src/depuracion_txt.py](src/depuracion_txt.py): utilidades para depurar/convertir TXT por bloques y separar train/test.
-- [generate_pools.sh](generate_pools.sh): script para generar automáticamente pools separados train/test.
+- [src/modeling.py](src/modeling.py): construccion del pipeline y evaluacion del modelo (CPU con HistGradientBoosting o GPU con XGBoost via `--device`).
+- [src/depuracion_txt.py](src/depuracion_txt.py): utilidades para depurar/convertir TXT por bloques y separar train/val/test.
+- [src/compare_imputers.py](src/compare_imputers.py): compara varias técnicas de imputación (mean/median/linear/knn/rf/hgbt).
+- [src/brand_model_analysis.py](src/brand_model_analysis.py): estudio de influencia de MARCA/MODELO en el error de imputación (ver [ANALISIS_MARCA_MODELO.md](ANALISIS_MARCA_MODELO.md)).
+- [src/nrcan_augment_experiment.py](src/nrcan_augment_experiment.py): experimento de aumento de datos con NRCan Canadá (ver [EXPERIMENTO_NRCAN.md](EXPERIMENTO_NRCAN.md)).
+- [src/results_pipeline.py](src/results_pipeline.py): utilidad opcional de post-procesado (tablas/plots/log a partir de una lista de resultados); no forma parte del pipeline DVC actual.
+- [generate_pools.sh](generate_pools.sh): script para generar automáticamente pools separados train/val/test.
 - [data/raw/](data/raw/): datos originales (parque_vehiculos_202503.txt)
-- [data/processed/pool_train/](data/processed/pool_train/): muestras para **ENTRENAMIENTO** (80%)
-- [data/processed/pool_test/](data/processed/pool_test/): muestras para **PRUEBA** (20%, sin overlap con train)
+- [data/processed/pool_train/](data/processed/pool_train/): muestras para **ENTRENAMIENTO** (70% por defecto)
+- [data/processed/pool_val/](data/processed/pool_val/): muestras para **VALIDACIÓN** (15% por defecto)
+- [data/processed/pool_test/](data/processed/pool_test/): muestras para **PRUEBA** (15% por defecto, sin overlap con train/val)
 - [artifacts/models/](artifacts/models/): modelos serializados.
 - [artifacts/metrics/](artifacts/metrics/): metricas en JSON.
+- [results/](results/): tablas y gráficas generadas por `compare_imputers.py` y `brand_model_analysis.py`.
 - [tests/](tests/): tests unitarios para los modulos principales.
+
+Documentación adicional: [DOCUMENTACION_MODELO.md](DOCUMENTACION_MODELO.md) (detalle interno del modelo), [ANALISIS_MARCA_MODELO.md](ANALISIS_MARCA_MODELO.md), [EXPERIMENTO_NRCAN.md](EXPERIMENTO_NRCAN.md), [EstudioVarYModelos.md](EstudioVarYModelos.md), [RESULTADOS_MODELO.md](RESULTADOS_MODELO.md).
 
 ## Requisitos
 
@@ -95,7 +103,7 @@ Instalacion:
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-## Reproducibilidad (DVC + MLflow)
+## Reproducibilidad (DVC)
 
 El pipeline completo (depuración → entrenamiento → comparación de imputadores → análisis marca/modelo) está definido como un DAG en [dvc.yaml](dvc.yaml), parametrizado vía [params.yaml](params.yaml).
 
@@ -117,18 +125,11 @@ El pipeline completo (depuración → entrenamiento → comparación de imputado
 
 El dataset crudo (`data/raw/parque_vehiculos_202503.txt`) está versionado con `dvc add` (ver `data/raw/*.dvc`); el binario no se sube a git, solo su hash. No hay remote DVC configurado por defecto — para compartir datos entre máquinas, añadir uno con `dvc remote add`.
 
-Cada ejecución de `imputacion_co2_ml.py` y `compare_imputers.py` registra parámetros, métricas y artefactos en MLflow (carpeta local `mlruns/`):
+## Paso 1: Generar pools separados de TRAIN, VAL y TEST
 
-```bash
-./.venv/bin/mlflow ui
-```
-
-Esto levanta una UI en `http://localhost:5000` para comparar runs (MAE/RMSE/R² por `missing_rate`, `device`, técnica de imputación, etc.).
-
-## Paso 1: Generar pools separados de TRAIN y TEST
-
-**Nuevo flujo recomendado**: Separar automáticamente los datos en pool_train (80%) y pool_test (20%) 
-para garantizar que no haya overlap entre entrenamiento y evaluación.
+Separar automáticamente los datos en pool_train (70%), pool_val (15%) y pool_test (15%)
+para garantizar que no haya overlap entre entrenamiento, validación y evaluación. El reparto es
+**determinístico** (bucketing por índice de fila módulo 10 000), garantizando reproducibilidad.
 
 ### Opción A: Usando el script automatizado (recomendado)
 
@@ -138,10 +139,10 @@ chmod +x generate_pools.sh
 ```
 
 Esto genera:
-- `data/processed/pool_train/`: ~80% de los datos para entrenar
-- `data/processed/pool_test/`: ~20% de los datos para evaluar
-
-La separación es **determinística** basada en el índice de fila, garantizando reproducibilidad y sin overlap.
+- `data/processed/pool_train/`: ~70% de los datos para entrenar
+- `data/processed/pool_val/`: ~15% de los datos para validar durante el desarrollo
+- `data/processed/pool_test/`: ~15% de los datos para evaluar el modelo final
+- `artifacts/metrics/split_period_report.json`: cobertura temporal de cada split
 
 ### Opción B: Comando manual
 
@@ -149,9 +150,11 @@ La separación es **determinística** basada en el índice de fila, garantizando
 ./.venv/bin/python src/depuracion_txt.py \
   --input data/raw/parque_vehiculos_202503.txt \
   --pool-dir data/processed/pool_train \
+  --pool-val-dir data/processed/pool_val \
   --pool-test-dir data/processed/pool_test \
-  --train-ratio 0.8 \
-  --rows-per-sample 100000 \
+  --train-ratio 0.7 \
+  --val-ratio 0.15 \
+  --rows-per-sample 200000 \
   --keep-remainder \
   --in-sep '|' \
   --out-sep ',' \
@@ -160,20 +163,22 @@ La separación es **determinística** basada en el índice de fila, garantizando
 ```
 
 Parámetros clave:
-- `--train-ratio`: proporción de datos para entrenamiento (default: 0.8 = 80% train, 20% test)
-- `--pool-dir`: directorio de salida para pool de ENTRENAMIENTO
-- `--pool-test-dir`: directorio de salida para pool de PRUEBA
+- `--train-ratio` / `--val-ratio`: proporciones para train y validación (default: 0.7 / 0.15; el resto, 0.15, va a test)
+- `--pool-dir` / `--pool-val-dir` / `--pool-test-dir`: directorios de salida para ENTRENAMIENTO, VALIDACIÓN y PRUEBA
+- `--rows-per-sample`: filas por archivo CSV generado (default: 200 000)
 - `--keep-remainder`: guarda las filas restantes que no completan una muestra
 
 ## Paso 2: Entrenar e imputar con datos de TRAIN
 
-Entrenar el modelo **solo** con pool_train (sin tocar pool_test):
+Entrenar el modelo con pool_train (validación cruzada) y evaluarlo también en pool_val y pool_test:
 
 ```bash
 ./.venv/bin/python src/imputacion_co2_ml.py \
   --input-dir data/processed/pool_train \
+  --val-dir data/processed/pool_val \
   --test-dir data/processed/pool_test \
-  --missing-rate 20 \
+  --missing-rate 0.2 \
+  --device cpu \
   --simplificado \
   --sep ',' \
   --encoding utf-8
@@ -181,109 +186,71 @@ Entrenar el modelo **solo** con pool_train (sin tocar pool_test):
 
 Parámetros clave:
 - `--input-dir`: pool de ENTRENAMIENTO (default: `data/processed/pool_train`)
+- `--val-dir`: pool de VALIDACIÓN (default: `data/processed/pool_val`; opcional, omitir para saltar esa evaluación)
 - `--test-dir`: pool de TEST **separado** para evaluar el modelo final (opcional pero recomendado)
-- `--missing-rate`: porcentaje de CO2 a ocultar para imputación artificial
+- `--missing-rate`: proporción de CO2 a ocultar para imputación artificial (0–1)
+- `--device`: `cpu` (HistGradientBoostingRegressor) o `cuda` (XGBoost en GPU)
 - `--simplificado`: genera CSV con solo filas imputadas
 
 **Salidas generadas**:
 - Modelo entrenado: `artifacts/models/co2_model.joblib`
-- Métricas (incluyendo test): `artifacts/metrics/co2_metrics.json`
-- CSV imputado (train): `data/processed/muestra_50k_co2_imputado.csv`
-- CSV simplificado: `data/processed/datos_simpl.csv` (si `--simplificado`)
+- Métricas (train + val + test): `artifacts/metrics/co2_metrics.json`
+- Reporte temporal por split: `artifacts/metrics/period_split_report.json`
+- CSV imputado (train): `data/processed/22_05.csv` (ruta configurable con `--output`)
+- CSV simplificado: `data/processed/simplificado/datos_simpl.csv` (si `--simplificado`)
 
 Las métricas JSON incluirán:
 - Métricas de validación cruzada (train)
-- Métricas de evaluación en test set (si `--test-dir` se proporciona)
+- Métricas de evaluación en val/test (si `--val-dir`/`--test-dir` se proporcionan)
 
-## Paso 3: generar tablas, graficas y log de experimentos
+## Paso 3: comparar técnicas de imputación
 
-El modulo [src/results_pipeline.py](src/results_pipeline.py) crea automaticamente:
-
-- Tabla plana de resultados por experimento.
-- Tabla pivote de comparacion de MSE por imputador y missing rate.
-- Graficas MSE y MAE vs missing rate.
-- Log con fecha, imputadores, missing rates y numero de experimentos.
-
-Por defecto, toma metricas reales desde
-[artifacts/metrics/co2_metrics.json](artifacts/metrics/co2_metrics.json)
-(generado por [src/imputacion_co2_ml.py](src/imputacion_co2_ml.py)) y construye
-las tablas/plots para el modelo unico actual (`HistGradientBoostingRegressor`).
-
-Comando (modo real por defecto):
+[src/compare_imputers.py](src/compare_imputers.py) evalúa por validación cruzada varias técnicas
+(`mean`, `median`, `linear`, `knn`, `rf`, `hgbt`) sobre pool_train con un missing rate artificial fijo:
 
 ```bash
-./.venv/bin/python src/results_pipeline.py
-```
-
-CSV real de resultados (si se define, tiene prioridad sobre --mode):
-
-```bash
-./.venv/bin/python src/results_pipeline.py \
-  --input results/tables/experiment_results.csv
-```
-
-Modo demo (datos ficticios de ejemplo):
-
-```bash
-./.venv/bin/python src/results_pipeline.py --mode demo
+./.venv/bin/python src/compare_imputers.py \
+  --input-dir data/processed/pool_train \
+  --missing-rate 0.2 \
+  --cv-folds 5 \
+  --knn-neighbors 5
 ```
 
 Salidas:
 
-- [results/tables/experiment_results.csv](results/tables/experiment_results.csv)
-- [results/tables/mse_comparison.csv](results/tables/mse_comparison.csv)
-- [results/plots/mse_vs_missing_rate.png](results/plots/mse_vs_missing_rate.png)
-- [results/plots/mae_vs_missing_rate.png](results/plots/mae_vs_missing_rate.png)
-- [results/logs/experiment_log.txt](results/logs/experiment_log.txt)
+- [artifacts/metrics/imputer_comparison.json](artifacts/metrics/imputer_comparison.json): metadatos + métricas por técnica.
+- [results/tables/imputer_comparison.csv](results/tables/imputer_comparison.csv): tabla ordenada por MAE.
+- [results/plots/imputer_comparison.png](results/plots/imputer_comparison.png): comparación gráfica de MAE/RMSE/R² por técnica.
 
-## Como interpretar tablas y plots
+## Paso 4: análisis por marca/modelo (opcional)
 
-### 1) Tabla de experimentos
+[src/brand_model_analysis.py](src/brand_model_analysis.py) evalúa el error del modelo entrenado
+desagregado por MARCA y MODELO, y un estudio de ablación con/sin esas variables. Ver
+[ANALISIS_MARCA_MODELO.md](ANALISIS_MARCA_MODELO.md) para el detalle completo de uso e interpretación.
 
-Archivo: [results/tables/experiment_results.csv](results/tables/experiment_results.csv)
+## Como interpretar la comparación de imputadores
 
-- Cada fila representa un experimento (`imputer`, `missing_rate`, `mse`, `mae`).
-- En el flujo actual, normalmente veras una sola fila/modelo
-  (`HistGradientBoostingRegressor`) en modo real.
-- Menor `mse` y menor `mae` significan mejor imputacion.
-- Sirve para comparar metodos en un missing rate especifico.
+### 1) Tabla de resultados
 
-### 2) Tabla pivote de MSE
+Archivo: [results/tables/imputer_comparison.csv](results/tables/imputer_comparison.csv)
 
-Archivo: [results/tables/mse_comparison.csv](results/tables/mse_comparison.csv)
+- Cada fila es una técnica (`mean`, `median`, `linear`, `knn`, `rf`, `hgbt`) con su `mae`, `rmse`, `r2` (y desviaciones estándar de CV).
+- Menor `mae`/`rmse` y mayor `r2` significan mejor imputación.
+- Ordenada por `mae` ascendente: la primera fila es la mejor técnica al `missing_rate` evaluado.
 
-- Filas: imputadores.
-- Columnas: niveles de `missing_rate`.
-- Valores: MSE.
-- Regla rapida: cuanto menor sea el valor, mejor comportamiento del imputador.
+### 2) Plot comparativo
 
-### 3) Plot de MSE
+Archivo: [results/plots/imputer_comparison.png](results/plots/imputer_comparison.png)
 
-Archivo: [results/plots/mse_vs_missing_rate.png](results/plots/mse_vs_missing_rate.png)
-
-- Muestra como cambia el error cuadratico al aumentar faltantes.
-- Linea mas baja: mejor precision global.
-- Pendiente mas suave: mayor robustez al missing.
-
-### 4) Plot de MAE
-
-Archivo: [results/plots/mae_vs_missing_rate.png](results/plots/mae_vs_missing_rate.png)
-
-- Mide error absoluto medio, mas interpretable en unidades de CO2.
-- Si MSE sube mucho mas que MAE, puede haber errores grandes puntuales.
-
-### 5) Log de experimento
-
-Archivo: [results/logs/experiment_log.txt](results/logs/experiment_log.txt)
-
-- Resume trazabilidad de ejecucion.
-- Incluye fecha/hora, metodos evaluados y cobertura de experimentos.
+- Tres subgráficas de barras (MAE, RMSE, R²) con una barra por técnica.
+- Permite ver de un vistazo si el ranking por MAE se mantiene en RMSE y R².
 
 ## Criterio practico para elegir imputador
 
-- Primero, compara MAE y MSE al mismo `missing_rate`.
-- Luego, revisa si el ranking se mantiene cuando sube el missing.
-- El mejor candidato suele ser el que combina error bajo y estabilidad de curva.
+- Primero, compara MAE y RMSE al mismo `missing_rate`.
+- Luego, revisa si el ranking se mantiene al repetir la comparación con otro `missing_rate`
+  (editando `compare.missing_rate` en [params.yaml](params.yaml) y volviendo a ejecutar).
+- El mejor candidato suele ser el que combina error bajo y ranking estable entre missing rates.
 
 ## Notas de calidad de datos
 

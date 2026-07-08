@@ -214,4 +214,4 @@ europeas de volumen:
 | [data/nrcan/nrcan_combined.csv](data/nrcan/nrcan_combined.csv) | Datos NRCan adaptados (12 401 filas) |
 | [results/nrcan_augment_experiment.json](results/nrcan_augment_experiment.json) | Métricas globales + segmentadas por año |
 | [src/nrcan_augment_experiment.py](src/nrcan_augment_experiment.py) | Script del experimento |
-| [datos_TFG/comparacion_eu_canada.md](../datos_TFG/comparacion_eu_canada.md) | Análisis EEA-2010 vs NRCan-2010 (371 pares, derivación de factores) |
+| [datos_tfg/comparacion_eu_canada.md](../datos_tfg/comparacion_eu_canada.md) | Análisis EEA-2010 vs NRCan-2010 (371 pares, derivación de factores) |

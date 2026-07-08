@@ -6,4 +6,3 @@ xgboost
 matplotlib
 pytest
 dvc
-mlflow

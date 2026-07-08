@@ -6,7 +6,6 @@
 !/data/raw/*.dvc
 /data/processed/pool*
 /.venv
-/mlruns
 
 # Python cache
 __pycache__/
@@ -21,12 +20,7 @@ data/processed/datos_simpl.csv
 data/processed/*.csv
 data/processed/simplificado/
 
-# MLflow
-mlflow.db
-mlruns/
-
 # Results and plots
-/results/reports
 /src/__pycache__/*.pyc
 /src/__pycache__/*.pyo
 /src/__pycache__/*.pyd
